@@ -20,7 +20,7 @@ builds:
       - arm64
       - arm
     ldflags:
-      - -s -w -X main.Version={{.Version}}
+      - -s -w -X main.GitVersion={{.Version}} -X main.GitCommit={{.ShortCommit}} -X main.BuildDate={{.Date}}
 
 archives:
   - format_overrides:

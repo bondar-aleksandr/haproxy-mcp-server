@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tuannvm/haproxy-mcp-server/.dagger/internal/dagger"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/.dagger/internal/dagger"
 )
 
 // Debug broken tests. Returns a unified diff of the test fixes

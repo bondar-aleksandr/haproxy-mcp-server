@@ -1,4 +1,4 @@
-module github.com/tuannvm/haproxy-mcp-server/.dagger
+module github.com/bondar-aleksandr/haproxy-mcp-server/.dagger
 
 go 1.23.0
 

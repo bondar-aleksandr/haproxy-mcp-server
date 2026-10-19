@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 
-	"github.com/tuannvm/haproxy-mcp-server/.dagger/internal/dagger"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/.dagger/internal/dagger"
 )
 
 // Agent to review changes made in a Directory

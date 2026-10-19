@@ -5,9 +5,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    # Assign pull requests to specific users
-    assignees:
-      - "tuannvm"
     # Labels to apply to pull requests
     labels:
       - "ci/cd"
@@ -23,8 +20,6 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    assignees:
-      - "tuannvm"
     labels:
       - "dependencies"
       - "go"
@@ -36,8 +31,6 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
-    assignees:
-      - "tuannvm"
     labels:
       - "dependencies"
       - "docker"

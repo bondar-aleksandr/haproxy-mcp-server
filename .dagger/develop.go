@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tuannvm/haproxy-mcp-server/.dagger/internal/dagger"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/.dagger/internal/dagger"
 )
 
 // Complete an assignment for the greetings project and get back the completed work

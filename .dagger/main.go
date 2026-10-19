@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tuannvm/haproxy-mcp-server/.dagger/internal/dagger"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/.dagger/internal/dagger"
 )
 
 type HaproxyMcpServer struct {
@@ -26,7 +26,7 @@ func New(
 	// +ignore=[".git", "**/node_modules"]
 	source *dagger.Directory,
 	// +optional
-	// +default="github.com/tuannvm/haproxy-mcp-server"
+	// +default="github.com/bondar-aleksandr/haproxy-mcp-server"
 	repo string,
 	// +optional
 	// +default="kylepenfound/greetings-api:latest"
