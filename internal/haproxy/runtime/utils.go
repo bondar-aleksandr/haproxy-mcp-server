@@ -50,4 +50,3 @@ func ParseServersState(output string) ([]map[string]string, error) {
 	}
 	return rows, nil
 }
-

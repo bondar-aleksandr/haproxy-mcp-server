@@ -94,3 +94,31 @@ func TestRetryStopsOnCancel(t *testing.T) {
 		t.Fatal("Retry did not stop after cancellation")
 	}
 }
+
+func TestDescribeAddresses(t *testing.T) {
+	reg, err := NewRegistry(
+		&Instance{Name: "both", RuntimeURL: "tcp://10.0.0.1:9999", StatsURL: "http://admin:secret@10.0.0.1:8404/stats"},
+		&Instance{Name: "split", RuntimeURL: "tcp://10.0.0.2:9999", StatsURL: "http://10.0.0.3:8404/stats"},
+		&Instance{Name: "unix", RuntimeURL: "unix:///var/run/haproxy/admin.sock"},
+		&Instance{Name: "v6", StatsURL: "http://[2001:db8::1]:8404/stats"},
+		&Instance{Name: "dns", StatsURL: "https://lb.example.com/stats"},
+		&Instance{Name: "set", RuntimeURL: "unix:///run/admin.sock", Addresses: []string{"10.1.1.1", "10.1.1.2"}},
+		&Instance{Name: "override", StatsURL: "http://10.0.0.9:8404/stats", Addresses: []string{"203.0.113.7"}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, info := range reg.Describe() {
+		got[info.Name] = strings.Join(info.Addresses, ",")
+	}
+	want := map[string]string{
+		"both": "10.0.0.1", "split": "10.0.0.2,10.0.0.3", "unix": "", "v6": "2001:db8::1", "dns": "lb.example.com",
+		"set": "10.1.1.1,10.1.1.2", "override": "203.0.113.7", // configured addresses replace the derived ones
+	}
+	for name, addrs := range want {
+		if got[name] != addrs {
+			t.Errorf("%s: addresses %q, want %q", name, got[name], addrs)
+		}
+	}
+}

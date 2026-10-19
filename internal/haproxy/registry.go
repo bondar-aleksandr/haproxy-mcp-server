@@ -9,8 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/tuannvm/haproxy-mcp-server/internal/config"
 )
 
 // Instance is a named HAProxy instance managed by the server. It is declared by the configuration and
@@ -21,12 +19,15 @@ type Instance struct {
 	Description string
 
 	// RuntimeURL and StatsURL are the configured endpoints ("" when the API is not configured).
-	// They may contain credentials: use config.RedactURL before exposing them.
+	// They may contain credentials: never expose them as they are.
 	RuntimeURL string
 	StatsURL   string
 
 	// ConfigFile is the instance's haproxy.cfg, if one is configured.
 	ConfigFile string
+
+	// Addresses overrides the addresses derived from RuntimeURL and StatsURL, see InstanceInfo.
+	Addresses []string
 
 	// Connect establishes the connection to the instance. It is called at startup and then
 	// periodically until it succeeds.
@@ -263,15 +264,37 @@ type InstanceInfo struct {
 	Attempts    int        `json:"attempts,omitempty"`
 	// Capabilities are the configured APIs: "runtime" (read/write) and/or "stats" (read-only). They
 	// are reported for unavailable instances too.
-	Capabilities []string     `json:"capabilities"`
-	Runtime      *APIEndpoint `json:"runtime,omitempty"`
-	Stats        *APIEndpoint `json:"stats,omitempty"`
+	Capabilities []string `json:"capabilities"`
+	// Addresses are the IPs (or names, if the configuration uses names) HAProxy is reachable at:
+	// the configured "address" setting, else the hosts of the Runtime API (tcp) and stats page URLs,
+	// without ports, paths or credentials. Frontends that bind to all addresses ("*:443") are
+	// reachable on these. An instance reached only through a unix socket has none unless configured.
+	Addresses []string `json:"addresses,omitempty"`
 }
 
-// APIEndpoint describes how an API of an instance is reached.
-type APIEndpoint struct {
-	Type string `json:"type,omitempty"` // runtime only: "tcp" or "unix"
-	URL  string `json:"url"`            // credentials masked
+// EffectiveAddresses returns the addresses an instance is reachable at: the configured ones, else
+// the hosts of its Runtime API and stats page URLs.
+func EffectiveAddresses(configured []string, runtimeURL, statsURL string) []string {
+	if len(configured) > 0 {
+		return configured
+	}
+	return hosts(runtimeURL, statsURL)
+}
+
+// hosts returns the distinct hosts of the given URLs, in order; URLs without a host (unix sockets) and
+// unparsable ones are skipped.
+func hosts(urls ...string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" || seen[u.Hostname()] {
+			continue
+		}
+		seen[u.Hostname()] = true
+		out = append(out, u.Hostname())
+	}
+	return out
 }
 
 // Describe returns the public description of every instance, sorted by name.
@@ -295,16 +318,11 @@ func (r *Registry) Describe() []InstanceInfo {
 
 		if inst.HasRuntime() {
 			info.Capabilities = append(info.Capabilities, "runtime")
-			ep := &APIEndpoint{URL: config.RedactURL(inst.RuntimeURL)}
-			if u, err := url.Parse(inst.RuntimeURL); err == nil {
-				ep.Type = u.Scheme
-			}
-			info.Runtime = ep
 		}
 		if inst.HasStats() {
 			info.Capabilities = append(info.Capabilities, "stats")
-			info.Stats = &APIEndpoint{URL: config.RedactURL(inst.StatsURL)}
 		}
+		info.Addresses = EffectiveAddresses(inst.Addresses, inst.RuntimeURL, inst.StatsURL)
 		infos = append(infos, info)
 	}
 	return infos

@@ -42,7 +42,7 @@ func registerStatTools(s *server.MCPServer, reg *haproxy.Registry) {
     // debug_counters tool
     debugCounters := mcp.NewTool("debug_counters",
         readOnly(),
-        mcp.WithDescription("Shows HAProxy internal counters (allocations, events)"),
+        mcp.WithDescription("Lists HAProxy's internal rare-event counters (\"debug counters\"): only those that are not zero, so an empty list is the healthy case. Needs an operator-level (or higher) Runtime API socket."),
     )
     addRuntimeTool(s, reg, debugCounters, func(ctx context.Context, req mcp.CallToolRequest, client *haproxy.HAProxyClient) (*mcp.CallToolResult, error) {
         slog.InfoContext(ctx, "Executing debug_counters")

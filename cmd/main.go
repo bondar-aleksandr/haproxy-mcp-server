@@ -161,6 +161,7 @@ func newRegistry(configs []config.InstanceConfig) (*haproxy.Registry, error) {
 			RuntimeURL:  runtimeAPIURL,
 			StatsURL:    statsURL,
 			ConfigFile:  ic.ConfigFile,
+			Addresses:   ic.Addresses,
 			Connect:     func() (*haproxy.HAProxyClient, error) { return connect(ic, runtimeAPIURL, statsURL) },
 		})
 	}
@@ -180,5 +181,6 @@ func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string) (*haproxy
 		return nil, err
 	}
 	client.ConfigFile = ic.ConfigFile
+	client.Addresses = haproxy.EffectiveAddresses(ic.Addresses, runtimeAPIURL, statsURL)
 	return client, nil
 }

@@ -32,7 +32,7 @@ func registerFrontendTools(s *server.MCPServer, reg *haproxy.Registry) {
 	listServices := mcp.NewTool("list_services",
 		readOnly(),
 		mcp.WithDescription("START HERE. Lists what HAProxy serves: for each frontend, where it listens (bind addresses) and which backends "+
-			"it routes to (conditions, default), with each backend's status and servers up/total. Needs the instance's config_file for "+
+			"it routes to (conditions with the definitions of their ACLs, e.g. which Host goes to which backend; default), with each backend's status and servers up/total. Needs the instance's config_file for "+
 			"routes and bind IPs. Use list_frontends / list_backends to look closer at one side."),
 		mcp.WithString("name", mcp.Description("Only this frontend")),
 		withDetail("terse", "standard"),

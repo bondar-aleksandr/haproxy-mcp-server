@@ -226,7 +226,7 @@ func TestInstancesResource(t *testing.T) {
 		Instances []struct {
 			Name         string   `json:"name"`
 			Capabilities []string `json:"capabilities"`
-			Runtime      *struct{ Type, URL string }
+			Addresses    []string `json:"addresses"`
 		} `json:"instances"`
 	}
 	if err := json.Unmarshal([]byte(text), &doc); err != nil {
@@ -235,11 +235,17 @@ func TestInstancesResource(t *testing.T) {
 	if len(doc.Instances) != 2 || doc.Instances[0].Name != "edge" || doc.Instances[1].Name != "prod" {
 		t.Fatalf("unexpected instances: %s", text)
 	}
-	if got := strings.Join(doc.Instances[0].Capabilities, ","); got != "stats" || doc.Instances[0].Runtime != nil {
-		t.Errorf("edge capabilities = %q", got)
+	if got := strings.Join(doc.Instances[0].Capabilities, ","); got != "stats" || strings.Join(doc.Instances[0].Addresses, ",") != "10.0.1.1" {
+		t.Errorf("edge: capabilities %q, addresses %v", got, doc.Instances[0].Addresses)
 	}
-	if got := strings.Join(doc.Instances[1].Capabilities, ","); got != "runtime,stats" || doc.Instances[1].Runtime.Type != "tcp" {
-		t.Errorf("prod capabilities = %q, runtime %+v", got, doc.Instances[1].Runtime)
+	// The same host serves both APIs: it is listed once, without ports, paths or credentials.
+	if got := strings.Join(doc.Instances[1].Capabilities, ","); got != "runtime,stats" || strings.Join(doc.Instances[1].Addresses, ",") != "10.0.0.1" {
+		t.Errorf("prod: capabilities %q, addresses %v", got, doc.Instances[1].Addresses)
+	}
+	for _, key := range []string{`"runtime"`, `"stats"`, `"url"`} { // the endpoint objects are gone
+		if strings.Contains(text, key+":") {
+			t.Errorf("unexpected key %s in the resource: %s", key, text)
+		}
 	}
 }
 

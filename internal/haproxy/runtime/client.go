@@ -253,6 +253,13 @@ func (c *HAProxyClient) ExecuteRuntimeCommandWithContext(ctx context.Context, co
 		}
 	}
 
+	// Refusals come back as plain text, not as an error code.
+	if msg := strings.TrimSpace(result); strings.HasPrefix(msg, "Permission denied") || strings.HasPrefix(msg, "Unknown command") {
+		msg, _, _ = strings.Cut(msg, "\n")
+		slog.Debug("HAProxy refused the command", "command", command, "response", msg)
+		return "", fmt.Errorf("HAProxy refused %q: %s (the access level of the Runtime API socket may be too low)", command, msg)
+	}
+
 	slog.Debug("Successfully executed runtime command", "command", command)
 	return result, nil
 }

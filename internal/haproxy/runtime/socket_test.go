@@ -58,3 +58,30 @@ func TestExecuteCommandReadsWholeResponse(t *testing.T) {
 		t.Errorf("response truncated: got %d bytes, want %d", len(got), len(want))
 	}
 }
+
+// HAProxy answers a command the socket's access level does not allow with plain text.
+func TestRefusedCommandIsAnError(t *testing.T) {
+	url := fakeRuntime(t, func(conn net.Conn, cmd string) {
+		switch cmd {
+		case "show fd":
+			_, _ = conn.Write([]byte("Permission denied\n\n"))
+		case "show nothing":
+			_, _ = conn.Write([]byte("Unknown command: 'show', but maybe one of the following ones is a better match:\n  show info\n"))
+		default:
+			_, _ = conn.Write([]byte("Name: HAProxy\n"))
+		}
+	})
+	c, err := NewHAProxyClient(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ExecuteRuntimeCommand("show fd"); err == nil || !strings.Contains(err.Error(), "Permission denied") || !strings.Contains(err.Error(), "access level") {
+		t.Errorf("Permission denied should be an error, got %v", err)
+	}
+	if _, err := c.ExecuteRuntimeCommand("show nothing"); err == nil || !strings.Contains(err.Error(), "Unknown command") {
+		t.Errorf("Unknown command should be an error, got %v", err)
+	}
+	if out, err := c.ExecuteRuntimeCommand("show info"); err != nil || !strings.HasPrefix(out, "Name: HAProxy") {
+		t.Errorf("a normal response must pass: %q, %v", out, err)
+	}
+}

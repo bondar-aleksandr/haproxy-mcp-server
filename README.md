@@ -87,14 +87,16 @@ The `env` block is optional; it is the place for sensitive values overriding the
 
 The server provides read-only inspection tools; it deliberately has no tools that change servers, health checks, weights or the configuration, or reload HAProxy.
 
-| Tool | Purpose | Needs Runtime API |
-| --- | --- | --- |
-| `list_services` | **Start here.** Frontends with their bind addresses and the backends they route to, with backend health | no |
-| `list_frontends` | Frontends: status, binds, routes, counters | no |
-| `list_backends` | Backends and their servers: status, health, counters, frontends using them | no (server state: yes) |
-| `show_stat` | Raw statistics table (optional name filter) | no |
-| `show_info`, `debug_counters` | Process information, internal counters | yes |
-| `clear_counters_all` | Reset statistics counters | yes |
+| Tool | Purpose |
+| --- | --- |
+| `list_services` | **Start here.** Frontends with their bind addresses and the backends they route to, with backend health |
+| `list_frontends` | Frontends: status, binds, routes, counters |
+| `list_backends` | Backends and their servers: status, health, counters, frontends using them |
+| `show_stat` | Raw statistics table (optional name filter) |
+| `show_info`, `debug_counters` | Process information, internal rare-event counters |
+| `clear_counters_all` | Reset statistics counters |
+
+What each tool can report depends on what the instance gives the server access to: see [What the server can see](#what-the-server-can-see-stats-runtime-config).
 
 The three `list_*` tools share the same arguments, so the model can go from a first look to a single object without switching tools:
 
@@ -102,10 +104,6 @@ The three `list_*` tools share the same arguments, so the model can go from a fi
 - `name`: only this frontend / backend. For `list_backends`, `server` narrows to one server of that backend.
 
 Objects carry HAProxy's ids (`iid` for frontends and backends, `sid` for servers) to correlate the tools with each other and with `show_stat`.
-
-**Stats-only instances:** when an instance has no Runtime API (no `runtime.mode` of `tcp4`/`unix`, no `runtime.url`), only the tools marked "no" above work for it. The tools that need the Runtime API are not registered at all if no instance has it, and fail with a clear error for instances without it.
-
-For a complete list of all supported tools with their inputs, outputs, and corresponding HAProxy Runtime API commands, see the [tools.md](tools.md) documentation.
 
 ## Configuration
 
@@ -115,7 +113,7 @@ The server is configured with a TOML file passed via `--config` (required); see 
 haproxy-mcp-server --config /etc/haproxy-mcp/config.toml
 ```
 
-Every key can be overridden by an environment variable, which is the recommended way to supply sensitive values such as credentials embedded in a stats URL (`http://user:pass@host:8404/stats`). Precedence: environment variable > config file > built-in default. Credentials in URLs are masked in logs and in the `haproxy://instances` resource.
+Every key can be overridden by an environment variable, which is the recommended way to supply sensitive values such as credentials embedded in a stats URL (`http://user:pass@host:8404/stats`). Precedence: environment variable > config file > built-in default. Credentials in URLs are masked in logs and never appear in the `haproxy://instances` resource.
 
 ### HAProxy instances
 
@@ -138,6 +136,7 @@ url = "http://10.0.1.1:8404/stats"
 | Key (under `instances.<name>`) | Environment variable | Description | Default |
 | --- | --- | --- | --- |
 | `description` | HAPROXY_&lt;NAME&gt;_DESCRIPTION | Free text shown in the instances resource | |
+| `address` | HAPROXY_&lt;NAME&gt;_ADDRESS | IP(s) HAProxy is reachable at, a string or an array (env: comma or space separated). Reported as `addresses` in the instances resource instead of the hosts of the Runtime API and stats URLs; set it when clients reach HAProxy at another address than the management one, or when only a unix socket is used | derived from the URLs |
 | `config_file` | HAPROXY_&lt;NAME&gt;_CONFIG_FILE | The instance's `haproxy.cfg` (file, or directory of `*.cfg`) as readable from this server; enables bind IPs and frontend-to-backend routes, see below | |
 | `runtime.mode` | HAPROXY_&lt;NAME&gt;_RUNTIME_MODE | `tcp4` or `unix`; empty = no Runtime API | |
 | `runtime.host` | HAPROXY_&lt;NAME&gt;_HOST | Runtime API host (tcp4 only) | 127.0.0.1 |
@@ -150,8 +149,35 @@ url = "http://10.0.1.1:8404/stats"
 `<NAME>` is the instance name upper-cased with `-` as `_` (`eu-west` → `HAPROXY_EU_WEST_STATS_URL`). Environment variables only override keys of instances declared in the file; they cannot create instances. Each instance needs the Runtime API, the stats page, or both.
 
 - Every tool takes an `instance` argument (a required enum when several instances are configured, optional with one). A tool that needs the Runtime API fails with a clear error for an instance that only has the stats page.
-- The `haproxy://instances` MCP resource lists the configured instances with their description, `status` (`available`/`unavailable`, with `error`, `lastAttempt` and `attempts` when unavailable), capabilities (`runtime`, `stats`) and endpoints. The set of tools depends on the configured APIs, not on which instances are currently reachable.
+- The `haproxy://instances` MCP resource lists the configured instances with their description, `status` (`available`/`unavailable`, with `error`, `lastAttempt` and `attempts` when unavailable), `capabilities` (`runtime`, `stats`) and `addresses`: the IPs (hostnames, if the configuration uses names) HAProxy is reachable at: the `address` setting if given, else the hosts of the Runtime API (tcp) and stats page URLs (without ports, paths or credentials). A frontend bound to all addresses (`*:443`) is reachable on these. Instances reached only through a unix socket have no address unless `address` is set. The set of tools depends on the configured APIs, not on which instances are currently reachable.
 - An instance that cannot be reached (Runtime API or stats page) does not stop the server: it is listed as `unavailable` in the `haproxy://instances` resource, together with the last error, and tool calls targeting it fail with that error. It is retried in the background every `haproxy.retry_interval` until it connects, then becomes `available`. If every instance is unavailable the server still starts. Reachability is only checked until the first successful connection; an instance is not marked unavailable again later.
+
+### What the server can see: stats, runtime, config
+
+An instance is described by up to three sources. Each tool reports what its sources allow, and says so in `warnings` when something is missing.
+
+| Source | Setting | What it is | What it gives |
+| --- | --- | --- | --- |
+| **stats** | `stats.url` | HAProxy's stats page, read as JSON over HTTP (basic auth through the URL) | Status and counters of every frontend, backend and server: the `show stat` table |
+| **runtime** | `runtime.mode` / `runtime.url` | HAProxy's Runtime API (CLI socket over TCP or unix) | The same `show stat` table, plus the servers' operational state (`show servers state`), the listening ports (`show fd`), process information (`show info`) and the rare-event and statistics counters |
+| **config** | `config_file` | A readable copy of the instance's `haproxy.cfg`; not a connection to HAProxy | The static topology: bind addresses, the backends each frontend routes to (`use_backend`, `default_backend`) with their conditions and ACLs |
+
+An instance needs **stats or runtime** (or both); **config** is optional and only adds the static topology. When both stats and runtime are set, the stats page is used for `show stat` data (the runtime is the fallback), and the runtime for everything else.
+
+**Access level of the Runtime API socket.** HAProxy refuses commands above the level of the socket (`stats socket ... level user|operator|admin`). Checked on HAProxy 3.0.9: at `user`, `show info`, `show stat` and `show servers state` work; `show fd` and `debug counters` need `operator`; `clear counters all` is documented by HAProxy as `admin` only. A refused command is reported as an error (`HAProxy refused "show fd": Permission denied`), and a failing `show fd` becomes a warning in the overview tools instead of silently missing binds.
+
+**What each tool gets, and loses, without a source** (details per tool in [tools.md](tools.md#what-each-tool-needs)):
+
+| Tool | stats only | runtime only | + config |
+| --- | --- | --- | --- |
+| `list_services` | Frontends and their status; **no binds, no routes** | + listening **ports** (`port 443`); no routes | + **bind addresses and endpoints, routes with conditions, backend health per route** |
+| `list_frontends` | Status, mode, counters; no binds, no backends | + listening ports | + bind addresses and endpoints, `backends`, routes with ACLs |
+| `list_backends` | Status, servers, health, counters; no `state` | + servers' **operational state** (`RUNNING`, ...), full state rows | + `used_by` (the frontends routing to each backend) |
+| `show_stat` | Yes (143 columns) | Yes (raw CSV, ~200 columns, many empty) | no change |
+| `show_info` | **not available** | Yes | no change |
+| `debug_counters`, `clear_counters_all` | **not available** | Yes (operator / admin socket) | no change |
+
+The config file is read from disk (a mounted or copied `haproxy.cfg`), so it describes what that file says, not necessarily what HAProxy is running: check that it is the file the running process was started with (`show env` shows it as `HAPROXY_CFGFILES`).
 
 ### Frontends, backends and services
 
@@ -162,6 +188,8 @@ url = "http://10.0.1.1:8404/stats"
 - `list_services`: the joined view, one entry per frontend with its binds and, for each route, the state of the backend (status, servers up/down).
 
 HAProxy does not expose the `bind` IPs or the `default_backend`/`use_backend` rules through the Runtime API or the stats page, so these come from the instance's `haproxy.cfg`, given as `config_file` (mount it into the container if HAProxy runs elsewhere; the path is shown by `show env` as `HAPROXY_CFGFILES`). The file is parsed for `frontend`/`listen`/`defaults`/`backend` sections, `bind`, `acl`, `use_backend`, `default_backend` and `mode`; it is re-read when it changes, and it should be the file the running HAProxy was started with. Without `config_file`, frontends only report their listening ports (from the Runtime API, when available), no routes, and the results carry a `warnings` entry saying so. A `use_backend` with a log-format expression (`%[...]`) is reported as `dynamic`.
+
+**Where clients connect.** Binds are shown as written, followed by the addresses clients actually connect to. A bind to a specific IP (`bind 10.0.0.5:80`) is its own endpoint. A wildcard bind (`*:443`, `0.0.0.0:443`, `[::]:443`) is reachable on the instance's `addresses` (the `address` setting, else the hosts of its Runtime API and stats URLs), so the terse view reads `"*:443 ssl -> 172.18.62.7:443"`, and `standard` has the list in the bind's `endpoints`. An IPv4-only wildcard is not joined with IPv6 addresses; unix sockets have no endpoint. Binds known only from the Runtime API (no `config_file`) carry just the port, as the IP, and whether the bind is a wildcard, are not known.
 
 ### Global settings
 

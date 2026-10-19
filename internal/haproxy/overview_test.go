@@ -1,6 +1,7 @@
 package haproxy
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -308,6 +309,10 @@ func TestListServicesTerse(t *testing.T) {
 	if svc.IID != 2 || strings.Join(svc.Binds, "|") != "10.0.0.5:80|*:443 ssl" || len(svc.Routes) != 2 {
 		t.Fatalf("service: %+v", svc)
 	}
+	// The terse view says which hosts go where, not just the names of the ACLs.
+	if r := svc.Routes[0]; r.Backend != "api_BE" || r.Condition != "if host_api" || r.ACLs["host_api"] != "hdr(host) -i api.example.com" {
+		t.Errorf("first route: %+v", r)
+	}
 	if r := svc.Routes[1]; r.Backend != "app_BE" || r.BackendIID != 4 || !r.Default || r.Status != "UP" || r.ServersUp != 1 || r.ServersTotal != 3 {
 		t.Errorf("default route: %+v", r)
 	}
@@ -343,5 +348,125 @@ func TestOverviewFromStatsPage(t *testing.T) {
 	res, _, _ = c.ListFrontends("", DetailTerse)
 	if fes, _ := res.([]FrontendTerse); len(fes) != 1 || fes[0].Name != "fe" {
 		t.Errorf("frontends: %+v", res)
+	}
+}
+
+func TestBindEndpoints(t *testing.T) {
+	cfg := `
+frontend web_FE
+    bind 10.0.0.5:80
+    bind *:443 ssl crt /x.pem
+    bind 0.0.0.0:8080
+    bind [::]:9000
+    bind unix@/run/web.sock
+frontend admin_FE
+    bind :8404
+`
+	c := &HAProxyClient{
+		RuntimeClient: topologyRuntime{}, ConfigFile: writeCfg(t, cfg),
+		Addresses: []string{"172.18.62.7", "2001:db8::1"},
+	}
+
+	res, _, err := c.ListFrontends("web_FE", DetailTerse)
+	terse, _ := res.([]FrontendTerse)
+	if err != nil || len(terse) != 1 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	want := []string{
+		"10.0.0.5:80", // not a wildcard: the bind address is where clients connect, nothing to add
+		"*:443 ssl -> 172.18.62.7:443, [2001:db8::1]:443",
+		"0.0.0.0:8080 -> 172.18.62.7:8080", // an IPv4 wildcard is not reachable on the IPv6 address
+		"[::]:9000 -> 172.18.62.7:9000, [2001:db8::1]:9000",
+		"/run/web.sock",
+	}
+	if got := terse[0].Binds; strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("terse binds:\n got %q\nwant %q", got, want)
+	}
+
+	res, _, _ = c.ListFrontends("web_FE", DetailStandard)
+	std, _ := res.([]FrontendInfo)
+	binds := std[0].Binds
+	if strings.Join(binds[0].Endpoints, ",") != "10.0.0.5:80" || binds[0].Wildcard {
+		t.Errorf("specific bind: %+v", binds[0])
+	}
+	if strings.Join(binds[1].Endpoints, ",") != "172.18.62.7:443,[2001:db8::1]:443" || !binds[1].Wildcard || !binds[1].SSL {
+		t.Errorf("wildcard bind: %+v", binds[1])
+	}
+	if len(binds[4].Endpoints) != 0 {
+		t.Errorf("a socket has no endpoint: %+v", binds[4])
+	}
+
+	// The same through list_services.
+	res, _, _ = c.ListServices("web_FE", DetailTerse)
+	if svc, _ := res.([]ServiceTerse); len(svc) != 1 || svc[0].Binds[1] != want[1] {
+		t.Errorf("service binds: %+v", res)
+	}
+
+	// Without a known address a wildcard bind is shown as written; with a hostname it is joined as is.
+	c.Addresses = nil
+	res, _, _ = c.ListFrontends("admin_FE", DetailTerse)
+	if fe, _ := res.([]FrontendTerse); len(fe) != 1 || strings.Join(fe[0].Binds, ",") != "*:8404" {
+		t.Errorf("no address: %+v", res)
+	}
+	c.Addresses = []string{"lb.example.com"}
+	res, _, _ = c.ListFrontends("admin_FE", DetailTerse)
+	if fe, _ := res.([]FrontendTerse); len(fe) != 1 || strings.Join(fe[0].Binds, ",") != "*:8404 -> lb.example.com:8404" {
+		t.Errorf("hostname: %+v", res)
+	}
+
+	// Binds known from the runtime only (no config_file) have no IP, hence no endpoints.
+	c = &HAProxyClient{RuntimeClient: topologyRuntime{}, Addresses: []string{"172.18.62.7"}}
+	res, _, _ = c.ListFrontends("web_FE", DetailTerse)
+	if fe, _ := res.([]FrontendTerse); len(fe) != 1 || strings.Join(fe[0].Binds, ",") != "port 80,port 443" {
+		t.Errorf("runtime-only binds: %+v", res)
+	}
+}
+
+// fdDenied is a Runtime API whose socket does not allow "show fd" (access level "user").
+type fdDenied struct{ topologyRuntime }
+
+func (f fdDenied) ExecuteRuntimeCommand(cmd string) (string, error) {
+	if cmd == "show fd" {
+		return "", fmt.Errorf("HAProxy refused %q: Permission denied", cmd)
+	}
+	return f.topologyRuntime.ExecuteRuntimeCommand(cmd)
+}
+
+func TestListeningPortsWarning(t *testing.T) {
+	c := &HAProxyClient{RuntimeClient: fdDenied{}}
+	res, warnings, err := c.ListFrontends("web_FE", DetailTerse)
+	fe, _ := res.([]FrontendTerse)
+	if err != nil || len(fe) != 1 || len(fe[0].Binds) != 0 {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	found := false
+	for _, w := range warnings {
+		found = found || strings.Contains(w, "listening ports unavailable") && strings.Contains(w, "Permission denied")
+	}
+	if !found {
+		t.Errorf("a failing show fd must be reported, got %v", warnings)
+	}
+}
+
+type debugRuntime struct{ RuntimeClient }
+
+func (debugRuntime) ExecuteRuntimeCommand(cmd string) (string, error) {
+	if cmd != "debug counters" {
+		return "", fmt.Errorf("unexpected command %q", cmd)
+	}
+	return "Count     Type Location function(): \"condition\" [comment]\n" +
+		"3          GLT h2.c:5124 h2_detect_glitch(): \"too many glitches\"\n" +
+		"12         CNT fd.c:99 fd_update(): \"x > y\" [note]\n", nil
+}
+
+func TestDebugCounters(t *testing.T) {
+	c := &HAProxyClient{RuntimeClient: debugRuntime{}}
+	got, err := c.DebugCounters()
+	if err != nil || len(got) != 2 {
+		t.Fatalf("%+v, %v", got, err)
+	}
+	if got[0].Count != 3 || got[0].Type != "GLT" || !strings.HasPrefix(got[0].Location, "h2.c:5124 h2_detect_glitch()") ||
+		got[1].Count != 12 || !strings.Contains(got[1].Location, "[note]") {
+		t.Errorf("unexpected counters: %+v", got)
 	}
 }

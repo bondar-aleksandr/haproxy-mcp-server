@@ -33,6 +33,11 @@ type InstanceConfig struct {
 	Name        string
 	Description string
 
+	// Addresses, when set, are the IPs (or names) HAProxy is reachable at, as reported in the
+	// instances resource instead of the hosts of the Runtime API and stats page URLs. Needed when
+	// the clients' address differs from the management address, or when there is none (unix socket).
+	Addresses []string
+
 	// ConfigFile is the haproxy.cfg of the instance (file, or directory of *.cfg), as readable from
 	// this server. Optional: it tells where frontends listen and which backends they route to.
 	ConfigFile string
@@ -93,6 +98,7 @@ type instanceOption struct {
 var instanceOptions = []instanceOption{
 	{"description", "DESCRIPTION", ""},
 	{"config_file", "CONFIG_FILE", ""},
+	{"address", "ADDRESS", ""},
 	{"runtime.mode", "RUNTIME_MODE", ""}, // "tcp4", "unix"; empty = no Runtime API
 	{"runtime.host", "HOST", "127.0.0.1"},
 	{"runtime.port", "PORT", 9999},
@@ -199,6 +205,7 @@ func loadInstance(v *viper.Viper, known map[string]bool, keyPrefix, envPrefix, n
 		Name:          name,
 		Description:   v.GetString(keyPrefix + ".description"),
 		ConfigFile:    v.GetString(keyPrefix + ".config_file"),
+		Addresses:     stringList(v.Get(keyPrefix + ".address")),
 		RuntimeMode:   v.GetString(keyPrefix + ".runtime.mode"),
 		Host:          v.GetString(keyPrefix + ".runtime.host"),
 		Port:          v.GetInt(keyPrefix + ".runtime.port"),
@@ -257,4 +264,27 @@ func RedactURL(s string) string {
 		return s
 	}
 	return u.Redacted()
+}
+
+// stringList reads a setting that is either a TOML array or a string of comma/space separated values
+// (the form an environment variable has).
+func stringList(v interface{}) []string {
+	var raw []string
+	switch x := v.(type) {
+	case string:
+		raw = []string{x}
+	case []interface{}:
+		for _, e := range x {
+			raw = append(raw, fmt.Sprint(e))
+		}
+	case []string:
+		raw = x
+	}
+	var out []string
+	for _, r := range raw {
+		for _, f := range strings.FieldsFunc(r, func(c rune) bool { return c == ',' || c == ' ' || c == '\t' }) {
+			out = append(out, f)
+		}
+	}
+	return out
 }

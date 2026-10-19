@@ -35,7 +35,7 @@ type FrontendTerse struct {
 	Name     string   `json:"name"`
 	Status   string   `json:"status"`
 	Mode     string   `json:"mode,omitempty"`
-	Binds    []string `json:"binds,omitempty"`    // "*:443 ssl", "10.0.0.5:80", "port 80" when the IP is unknown
+	Binds    []string `json:"binds,omitempty"`    // "10.0.0.5:80", "*:443 ssl -> 172.18.62.7:443", "port 80" when the IP is unknown
 	Backends []string `json:"backends,omitempty"` // backends it routes to (needs config_file)
 }
 
@@ -68,17 +68,21 @@ type ServiceTerse struct {
 
 // ServiceRouteTerse is a route of a service with a one-line state of its backend.
 type ServiceRouteTerse struct {
-	Backend      string `json:"backend"`
-	BackendIID   int    `json:"backend_iid,omitempty"`
-	Condition    string `json:"condition,omitempty"`
-	Default      bool   `json:"default,omitempty"`
-	Dynamic      bool   `json:"dynamic,omitempty"`
-	Status       string `json:"status,omitempty"` // backend status; empty if the backend is not running
-	ServersUp    int    `json:"servers_up"`
-	ServersTotal int    `json:"servers_total"`
+	Backend    string `json:"backend"`
+	BackendIID int    `json:"backend_iid,omitempty"`
+	Condition  string `json:"condition,omitempty"` // "if ACL_app", "unless is_admin"
+	// ACLs defines the named ACLs used in the condition (e.g. "ACL_app": "hdr(host) -i app.example.com"):
+	// which hosts or paths go to the backend.
+	ACLs         map[string]string `json:"acls,omitempty"`
+	Default      bool              `json:"default,omitempty"`
+	Dynamic      bool              `json:"dynamic,omitempty"`
+	Status       string            `json:"status,omitempty"` // backend status; empty if the backend is not running
+	ServersUp    int               `json:"servers_up"`
+	ServersTotal int               `json:"servers_total"`
 }
 
-// short renders a bind the way it would be written: "*:443 ssl".
+// short renders a bind the way it is written in the configuration, with where clients connect for
+// a wildcard: "*:443 ssl -> 172.18.62.7:443".
 func (b BindInfo) short() string {
 	var s string
 	switch {
@@ -89,6 +93,9 @@ func (b BindInfo) short() string {
 	}
 	if b.SSL {
 		s += " ssl"
+	}
+	if b.Wildcard && len(b.Endpoints) > 0 {
+		s += " -> " + strings.Join(b.Endpoints, ", ")
 	}
 	return s
 }
@@ -209,7 +216,7 @@ func (c *HAProxyClient) ListServices(name string, d Detail) (interface{}, []stri
 		st := ServiceTerse{IID: f.IID, Frontend: f.Name, Status: f.Status, Binds: shortBinds(f.Binds)}
 		si := ServiceInfo{IID: f.IID, Frontend: f.Name, Status: f.Status, Mode: f.Mode, Binds: f.Binds}
 		for _, r := range f.Routes {
-			rt := ServiceRouteTerse{Backend: r.Backend, Condition: r.Condition, Default: r.Default, Dynamic: r.Dynamic}
+			rt := ServiceRouteTerse{Backend: r.Backend, Condition: r.Condition, ACLs: r.ACLs, Default: r.Default, Dynamic: r.Dynamic}
 			sr := ServiceRoute{RouteInfo: r}
 			if b, ok := backends[r.Backend]; ok {
 				counts := b.Servers

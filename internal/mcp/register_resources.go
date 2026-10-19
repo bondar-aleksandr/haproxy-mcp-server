@@ -17,8 +17,9 @@ const instancesResourceURI = "haproxy://instances"
 // of the "instance" tool argument and what each of them supports.
 func registerInstancesResource(s *server.MCPServer, reg *haproxy.Registry) {
 	resource := mcp.NewResource(instancesResourceURI, "HAProxy instances",
-		mcp.WithResourceDescription("HAProxy instances managed by this server: name, description and which APIs "+
-			"are configured (\"runtime\": read/write via the Runtime API, \"stats\": read-only via the stats page). "+
+		mcp.WithResourceDescription("HAProxy instances managed by this server: name, description, status, the addresses "+
+			"(IPs) HAProxy is reached at, and which APIs are configured (\"runtime\": Runtime API, \"stats\": read-only stats page). "+
+			"A frontend that binds to all addresses (\"*:443\") is reachable on the instance's addresses. "+
 			"Pass a name as the \"instance\" argument of the tools."),
 		mcp.WithMIMEType("application/json"),
 	)

@@ -180,3 +180,69 @@ func TestLoadDirectory(t *testing.T) {
 		t.Error("expected an error for a directory without *.cfg")
 	}
 }
+
+// The shape of a real production configuration (credentials replaced): a cache section, setenv,
+// frontends on bare ":port" binds, a TLS bind with a certificate directory, routing by Host ACLs
+// without default_backend, and commented-out blocks that must be ignored.
+const productionShape = `
+global
+        setenv ACCOUNT_THUMBPRINT 'not-a-real-thumbprint'
+        stats socket 0.0.0.0:9999 level user
+defaults
+        mode    http
+        timeout connect 5000
+cache FE_cache
+  total-max-size 100
+frontend stats
+  mode http
+  bind :8404
+  stats uri /stats
+  stats auth admin:not-a-real-password
+frontend prometheus
+  bind :8405
+  http-request use-service prometheus-exporter if { path /metrics }
+frontend web_FE
+  acl ACL_ACME path_beg /.well-known/acme-challenge/
+  acl ACL_ftree hdr(host) -i ftree.example.com
+#  acl ACL_redmine hdr(host) -i redmine.example.com
+  acl is_port_80 dst_port 80
+  bind :80
+  bind :443 ssl crt /etc/haproxy/certs/ strict-sni
+  http-request return status 200 content-type text/plain lf-string "%[path,field(-1,/)].${ACCOUNT_THUMBPRINT}\n" if ACL_ACME
+  http-request redirect scheme https unless { ssl_fc }
+  use_backend ftree_BE if ACL_ftree
+#  use_backend redmine_BE if ACL_redmine
+backend ftree_BE
+  server ftree 172.22.0.5:80 check
+#backend redmine_BE
+#  server redmine 172.18.62.6:80 check
+`
+
+func TestParseProductionShape(t *testing.T) {
+	cfg := Parse(productionShape)
+	if !reflect.DeepEqual(cfg.Backends, []string{"ftree_BE"}) { // the commented-out backend is not one
+		t.Errorf("Backends = %v", cfg.Backends)
+	}
+	names := []string{}
+	byName := map[string]Frontend{}
+	for _, f := range cfg.Frontends {
+		names = append(names, f.Name)
+		byName[f.Name] = f
+	}
+	if want := []string{"stats", "prometheus", "web_FE"}; !reflect.DeepEqual(names, want) { // "cache" is a section, not a frontend
+		t.Fatalf("frontends = %v", names)
+	}
+	if b := byName["stats"].Binds; len(b) != 1 || b[0].Port != "8404" || !b[0].Wildcard {
+		t.Errorf("stats binds: %+v", b)
+	}
+	web := byName["web_FE"]
+	if len(web.Binds) != 2 || web.Binds[0].Port != "80" || web.Binds[0].SSL || !web.Binds[1].SSL || web.Binds[1].Port != "443" || !web.Binds[1].Wildcard {
+		t.Errorf("web_FE binds: %+v", web.Binds)
+	}
+	if web.Mode != "http" || web.DefaultBackend != "" || len(web.Routes) != 1 { // no default_backend: unmatched requests get no backend
+		t.Fatalf("web_FE: %+v", web)
+	}
+	if r := web.Routes[0]; r.Backend != "ftree_BE" || r.Condition != "if ACL_ftree" || r.ACLs["ACL_ftree"] != "hdr(host) -i ftree.example.com" || len(r.ACLs) != 1 {
+		t.Errorf("route: %+v", r)
+	}
+}

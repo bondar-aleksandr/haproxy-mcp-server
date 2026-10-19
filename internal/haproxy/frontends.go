@@ -3,6 +3,7 @@ package haproxy
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"regexp"
 	"sort"
@@ -25,6 +26,12 @@ type BindInfo struct {
 	SSL      bool   `json:"ssl,omitempty"`
 	Wildcard bool   `json:"wildcard,omitempty"` // listens on every local address
 	Source   string `json:"source"`             // "config" (config_file) or "runtime" (listening sockets: port only)
+
+	// Endpoints are the addresses clients connect to: the bind address itself, or for a wildcard
+	// bind every address of the instance (its "address" setting, else the hosts of its API URLs) with
+	// the port. Empty for sockets, for runtime-only binds (the IP is unknown) and for a wildcard bind
+	// when the instance has no known address.
+	Endpoints []string `json:"endpoints,omitempty"`
 }
 
 // RouteInfo is a way for a frontend to reach a backend.
@@ -172,7 +179,10 @@ func (c *HAProxyClient) topology(level Detail) (*Topology, error) {
 	}
 	var listeners map[string][]BindInfo // from "show fd"
 	if cfg == nil || cfgErr != nil {
-		listeners = c.runtimeListeners()
+		var warn string
+		if listeners, warn = c.runtimeListeners(); warn != "" {
+			t.Warnings = append(t.Warnings, warn)
+		}
 	}
 
 	var states map[string]map[string]string // "show servers state" rows by backend/server
@@ -199,7 +209,7 @@ func (c *HAProxyClient) topology(level Detail) (*Topology, error) {
 				f.Stats = nonEmpty(row)
 			}
 			if fc, ok := frontendCfg[f.Name]; ok {
-				f.Binds, f.Routes = configBinds(fc), configRoutes(fc)
+				f.Binds, f.Routes = configBinds(fc, c.Addresses), configRoutes(fc)
 				if f.Mode == "" {
 					f.Mode = fc.Mode
 				}
@@ -306,7 +316,7 @@ func backendFromRow(row map[string]string, serverRows []map[string]string, state
 	return b
 }
 
-func configBinds(f hacfg.Frontend) []BindInfo {
+func configBinds(f hacfg.Frontend, instanceAddresses []string) []BindInfo {
 	binds := make([]BindInfo, 0, len(f.Binds))
 	for _, b := range f.Binds {
 		bi := BindInfo{IP: b.Address, Port: b.Port, Protocol: b.Protocol, SSL: b.SSL, Wildcard: b.Wildcard, Source: "config"}
@@ -320,9 +330,29 @@ func configBinds(f hacfg.Frontend) []BindInfo {
 		default:
 			bi.Address = b.Address + ":" + b.Port
 		}
+		bi.Endpoints = endpoints(b, instanceAddresses)
 		binds = append(binds, bi)
 	}
 	return binds
+}
+
+// endpoints returns the addresses clients connect to for a bind, see BindInfo.Endpoints.
+func endpoints(b hacfg.Bind, instanceAddresses []string) []string {
+	if b.Port == "" {
+		return nil // a socket
+	}
+	if !b.Wildcard {
+		return []string{net.JoinHostPort(b.Address, b.Port)}
+	}
+	var out []string
+	for _, a := range instanceAddresses {
+		// An IPv4 wildcard (0.0.0.0, ipv4@) cannot be reached on an IPv6 address; names may resolve to either.
+		if ip := net.ParseIP(a); ip != nil && ip.To4() == nil && (b.Protocol == "ipv4" || b.Protocol == "quic4") {
+			continue
+		}
+		out = append(out, net.JoinHostPort(a, b.Port))
+	}
+	return out
 }
 
 // configRoutes lists the use_backend rules of a frontend, then its default backend. A "listen"
@@ -395,15 +425,16 @@ func (c *HAProxyClient) loadConfig() (*hacfg.Config, error) {
 var listenerRe = regexp.MustCompile(`l\.st=\S+ fe=(\S+) fam=(\S+) lport=(\d+)`)
 
 // runtimeListeners returns, per frontend, the ports it listens on according to "show fd". The
-// listening IP is not reported by HAProxy there.
-func (c *HAProxyClient) runtimeListeners() map[string][]BindInfo {
+// listening IP is not reported by HAProxy there. The second result is a warning when the command
+// fails, typically because the Runtime API socket has a lower access level than "show fd" needs.
+func (c *HAProxyClient) runtimeListeners() (map[string][]BindInfo, string) {
 	if c.RuntimeClient == nil {
-		return nil
+		return nil, ""
 	}
 	out, err := c.RuntimeClient.ExecuteRuntimeCommand("show fd")
 	if err != nil {
-		slog.Debug("Cannot list the listening sockets", "error", err)
-		return nil
+		slog.Warn("Cannot list the listening sockets", "error", err)
+		return nil, fmt.Sprintf("listening ports unavailable: %v", err)
 	}
 	listeners := map[string][]BindInfo{}
 	seen := map[string]bool{}
@@ -418,7 +449,7 @@ func (c *HAProxyClient) runtimeListeners() map[string][]BindInfo {
 	for _, binds := range listeners {
 		sort.Slice(binds, func(i, j int) bool { return num(binds[i].Port) < num(binds[j].Port) })
 	}
-	return listeners
+	return listeners, ""
 }
 
 // num parses a stats counter; missing or non-numeric values are 0.

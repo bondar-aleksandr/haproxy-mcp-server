@@ -174,6 +174,28 @@ func TestConfigFile(t *testing.T) {
 	}
 }
 
+func TestAddress(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("HAPROXY_DEV_ADDRESS", "10.9.9.1, 10.9.9.2")
+	content := "[instances.prod]\naddress = [\"10.0.0.5\", \"10.0.0.6\"]\n[instances.prod.stats]\nurl = \"http://h/stats\"\n" +
+		"[instances.dev]\naddress = \"192.168.0.1\"\n[instances.dev.stats]\nurl = \"http://h2/stats\"\n" +
+		"[instances.none.stats]\nurl = \"http://h3/stats\"\n"
+	cfg, err := LoadConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, i := range cfg.Instances {
+		got[i.Name] = strings.Join(i.Addresses, "|")
+	}
+	want := map[string]string{"prod": "10.0.0.5|10.0.0.6", "dev": "10.9.9.1|10.9.9.2", "none": ""} // env beats the file
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("%s: addresses %q, want %q", name, got[name], w)
+		}
+	}
+}
+
 func TestEnvNameOfDashedInstance(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("HAPROXY_EU_WEST_STATS_URL", "http://10.2.2.2:8404/stats")

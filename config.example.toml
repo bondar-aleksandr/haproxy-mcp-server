@@ -32,6 +32,11 @@ level = "info"        # debug, info, warn, error                             # L
 
 [instances.prod]
 description = "Production edge"
+# IP(s) HAProxy is reachable at, reported in the instances resource. Optional: by default the hosts of
+# the Runtime API and stats URLs are used. Set it when clients reach HAProxy at another address than the
+# management one (frontends bound to "*" are reachable on it), or for a unix-socket instance. A string
+# or an array; the environment variable takes comma or space separated values.      # HAPROXY_PROD_ADDRESS
+# address = ["203.0.113.7"]
 # haproxy.cfg of this instance, as readable from this server (a file, or a directory of *.cfg files).
 # Optional, but the only way to learn the bind IPs of the frontends and which backends they route to
 # (default_backend / use_backend): neither the Runtime API nor the stats page exposes them. It is

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 
 	"github.com/tuannvm/haproxy-mcp-server/internal/config"
@@ -22,6 +23,10 @@ type HAProxyClient struct {
 	// used to tell where frontends listen and which backends they route to.
 	ConfigFile string
 	cfgCache   cachedConfig
+
+	// Addresses are what the instance is reachable at (see EffectiveAddresses): the endpoints of its
+	// wildcard binds.
+	Addresses []string
 }
 
 // HasRuntime reports whether the Runtime API (tcp4/unix) is configured.
@@ -211,27 +216,39 @@ func (c *HAProxyClient) ShowStat(filter string) ([]map[string]string, error) {
 	return nil, fmt.Errorf("neither stats client nor runtime client is initialized")
 }
 
-// DebugCounters returns debug counters
-func (c *HAProxyClient) DebugCounters() (map[string]interface{}, error) {
+// DebugCounter is a line of "debug counters": how many times a rare event (a BUG_ON/WARN_ON
+// condition, a glitch, ...) happened at a code location.
+type DebugCounter struct {
+	Count    int64  `json:"count"`
+	Type     string `json:"type"`     // BUG, CNT, CHK, GLT, ...
+	Location string `json:"location"` // file:line function(): "condition" [comment]
+}
+
+// DebugCounters returns the counters of "debug counters", which lists those that are not zero (so
+// usually none).
+func (c *HAProxyClient) DebugCounters() ([]DebugCounter, error) {
 	if c.RuntimeClient == nil {
 		return nil, fmt.Errorf("runtime client is not initialized")
 	}
 
-	response, err := c.RuntimeClient.ExecuteRuntimeCommand("debug dev state")
+	response, err := c.RuntimeClient.ExecuteRuntimeCommand("debug counters")
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse output into structured format
-	counters := make(map[string]interface{})
-	lines := strings.Split(response, "\n")
-	for _, line := range lines {
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 {
-			counters[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	// The output is a header line ("Count Type Location ...") followed by "<count> <type> <location>"
+	counters := []DebugCounter{}
+	for _, line := range strings.Split(response, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
 		}
+		n, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			continue // the header
+		}
+		counters = append(counters, DebugCounter{Count: n, Type: fields[1], Location: strings.Join(fields[2:], " ")})
 	}
-
 	return counters, nil
 }
 
