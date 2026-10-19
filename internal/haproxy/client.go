@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/config"
-	runtimeclient "github.com/tuannvm/haproxy-mcp-server/internal/haproxy/runtime"
-	statsclient "github.com/tuannvm/haproxy-mcp-server/internal/haproxy/stats"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/config"
+	runtimeclient "github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/runtime"
+	statsclient "github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/stats"
 )
 
 // HAProxyClient is a combined client that can interact with HAProxy through both runtime API and stats API

@@ -1,4 +1,4 @@
-module github.com/tuannvm/haproxy-mcp-server
+module github.com/bondar-aleksandr/haproxy-mcp-server
 
 go 1.25.5
 

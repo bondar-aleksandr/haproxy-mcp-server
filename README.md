@@ -1,13 +1,14 @@
 # HAProxy MCP Server
 
-[![Build](https://github.com/tuannvm/haproxy-mcp-server/actions/workflows/build.yml/badge.svg)](https://github.com/tuannvm/haproxy-mcp-server/actions/workflows/build.yml)
-[![Release](https://github.com/tuannvm/haproxy-mcp-server/actions/workflows/release.yml/badge.svg)](https://github.com/tuannvm/haproxy-mcp-server/actions/workflows/release.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/tuannvm/haproxy-mcp-server)](https://goreportcard.com/report/github.com/tuannvm/haproxy-mcp-server)
-![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/tuannvm/haproxy-mcp-server)
-![License](https://img.shields.io/github/license/tuannvm/haproxy-mcp-server)
-![Docker Pulls](https://img.shields.io/docker/pulls/tuannvm/haproxy-mcp-server)
+[![Build](https://github.com/bondar-aleksandr/haproxy-mcp-server/actions/workflows/build.yml/badge.svg)](https://github.com/bondar-aleksandr/haproxy-mcp-server/actions/workflows/build.yml)
+[![Release](https://github.com/bondar-aleksandr/haproxy-mcp-server/actions/workflows/release.yml/badge.svg)](https://github.com/bondar-aleksandr/haproxy-mcp-server/actions/workflows/release.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/bondar-aleksandr/haproxy-mcp-server)](https://goreportcard.com/report/github.com/bondar-aleksandr/haproxy-mcp-server)
+![GitHub release (latest SemVer)](https://img.shields.io/github/v/release/bondar-aleksandr/haproxy-mcp-server)
+![License](https://img.shields.io/github/license/bondar-aleksandr/haproxy-mcp-server)
 
 A Model Context Protocol (MCP) server for HAProxy implemented in Go, leveraging HAProxy Runtime API and mcp-go.
+
+This is a fork of [tuannvm/haproxy-mcp-server](https://github.com/tuannvm/haproxy-mcp-server), reworked into a read-only inspection server for several HAProxy instances (stats page, Runtime API and `haproxy.cfg`). It is not published as a package or image: build it from source as described below.
 
 ## Overview
 
@@ -25,38 +26,33 @@ The HAProxy MCP Server provides a standardized way for LLMs to interact with HAP
 - **Secure Authentication**: Support for secure connections to HAProxy runtime API
 - **Multiple Transport Options**: Supports both stdio and HTTP transports for flexibility in different environments
 - **Enterprise Ready**: Designed for production use in enterprise environments
-- **Docker Support**: Pre-built Docker images for easy deployment
+- **Docker Support**: a Dockerfile to build an image
 
 ## Installation
 
-### Homebrew
+There are no published releases, packages or images of this fork yet; build it from source (Go 1.25 or later).
+
+### From source
 
 ```bash
-# Add the tap
-brew tap tuannvm/tap
-
-# Install the package
-brew install haproxy-mcp-server
+git clone https://github.com/bondar-aleksandr/haproxy-mcp-server.git
+cd haproxy-mcp-server
+go build -o bin/haproxy-mcp-server ./cmd     # or: make build
+./bin/haproxy-mcp-server --config config.toml
 ```
 
-### From Binary
-
-Download the latest binary for your platform from the [releases page](https://github.com/tuannvm/haproxy-mcp-server/releases).
-
-### Using Go
-
-```bash
-go install github.com/tuannvm/haproxy-mcp-server/cmd/server@latest
-```
+`go install github.com/bondar-aleksandr/haproxy-mcp-server/cmd@latest` works as well, but Go names the binary after the last element of the path, so you get one called `cmd`.
 
 ### Using Docker
 
 ```bash
-docker pull ghcr.io/tuannvm/haproxy-mcp-server:latest
-docker run -it --rm \
+docker build -t haproxy-mcp-server .
+docker run -d --name haproxy-mcp -p 8082:8082 \
   -v $(pwd)/config.toml:/etc/haproxy-mcp/config.toml:ro \
-  ghcr.io/tuannvm/haproxy-mcp-server:latest --config /etc/haproxy-mcp/config.toml
+  haproxy-mcp-server --config /etc/haproxy-mcp/config.toml
 ```
+
+The image runs as an unprivileged user and sets `MCP_TRANSPORT=http` and `MCP_PORT=8082`; as with any setting, the environment wins over `config.toml` (override with `-e`). Pass credentials the same way, for example `-e HAPROXY_PROD_STATS_URL=http://user:pass@host:8404/stats`.
 
 ## MCP Integration
 

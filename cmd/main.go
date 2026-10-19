@@ -15,9 +15,9 @@ import (
 
 	"github.com/mark3labs/mcp-go/server" // Import directly without alias
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/config"
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
-	"github.com/tuannvm/haproxy-mcp-server/internal/mcp"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/config"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/mcp"
 )
 
 func main() {

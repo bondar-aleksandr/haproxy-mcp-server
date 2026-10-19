@@ -1,9 +1,9 @@
 package testing
 
 import (
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/common"
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/stats"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/common"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/stats"
 )
 
 // StatsClientAdapter adapts our mock to the haproxy.StatsClient interface

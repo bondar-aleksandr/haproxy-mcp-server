@@ -4,9 +4,9 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
 )
 
 // overviewResult runs an overview call with the "detail" argument of the request.

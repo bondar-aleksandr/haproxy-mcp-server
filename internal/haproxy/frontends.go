@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/hacfg"
-	runtimeclient "github.com/tuannvm/haproxy-mcp-server/internal/haproxy/runtime"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/hacfg"
+	runtimeclient "github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/runtime"
 )
 
 // BindInfo is an address a frontend listens on.

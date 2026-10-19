@@ -11,7 +11,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/config"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/config"
 )
 
 func TestNewRegistryKeepsUnreachableInstances(t *testing.T) {

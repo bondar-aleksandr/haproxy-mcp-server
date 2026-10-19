@@ -9,8 +9,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/hacfg"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/hacfg"
 )
 
 func registerConfigTool(s *server.MCPServer, reg *haproxy.Registry) {

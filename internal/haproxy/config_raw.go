@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/hacfg"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/hacfg"
 )
 
 // ConfigDump is the raw configuration of an instance.

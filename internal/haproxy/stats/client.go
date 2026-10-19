@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/common"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/common"
 )
 
 // StatsClient is a client for fetching HAProxy stats from the stats page

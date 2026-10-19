@@ -5,9 +5,9 @@ import (
     "fmt"
     "log/slog"
 
+    "github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
     "github.com/mark3labs/mcp-go/mcp"
     "github.com/mark3labs/mcp-go/server"
-    "github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
 )
 
 // instanceParam is the name of the tool argument that selects the HAProxy instance.

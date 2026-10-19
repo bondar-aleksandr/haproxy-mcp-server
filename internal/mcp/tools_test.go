@@ -13,8 +13,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy"
-	hatesting "github.com/tuannvm/haproxy-mcp-server/internal/haproxy/testing"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
+	hatesting "github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy/testing"
 )
 
 // registry builds a registry of single-client instances, named after the map keys.
