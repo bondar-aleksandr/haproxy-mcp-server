@@ -10,7 +10,7 @@ Objects carry HAProxy's own ids so the output of the tools can be matched with e
 
 ## What each tool needs
 
-An instance has up to three sources (see the README, "What the server can see"): **stats** (the stats page), **runtime** (the Runtime API socket) and **config** (a readable copy of `haproxy.cfg`, `config_file`). An instance needs stats or runtime; config is optional. The tables below show, per tool, what is reported with each source. "—" means the field or tool is not available; a missing piece is also named in the tool's `warnings`.
+An instance has up to three sources (see the [README](../README.md#what-the-server-can-see-stats-runtime-config)): **stats** (the stats page), **runtime** (the Runtime API socket) and **config** (a readable copy of `haproxy.cfg`, `config_file`). An instance needs stats or runtime; config is optional. The tables below show, per tool, what is reported with each source. "—" means the field or tool is not available; a missing piece is also named in the tool's `warnings`.
 
 ### list_services
 
@@ -71,7 +71,7 @@ These three are not registered at all while no instance has a Runtime API, and f
 
 ### Access level of the Runtime API socket
 
-Measured on HAProxy 3.0.9 (`stats socket ... level user|operator|admin`):
+Measured on HAProxy 3.0.9 (`stats socket ... level user|operator|admin`; how to set it: [haproxy.md](haproxy.md#access-level)):
 
 | Command | used by | `user` | `operator` | `admin` |
 | --- | --- | --- | --- | --- |

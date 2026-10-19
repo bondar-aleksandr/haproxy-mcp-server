@@ -28,6 +28,13 @@ The HAProxy MCP Server provides a standardized way for LLMs to interact with HAP
 - **Enterprise Ready**: Designed for production use in enterprise environments
 - **Docker Support**: a Dockerfile to build an image
 
+## Documentation
+
+- [docs/tools.md](docs/tools.md): the tools, their arguments and output, and what each reports with and without the stats page, the Runtime API and the configuration file
+- [docs/haproxy.md](docs/haproxy.md): setting up HAProxy for the server (Runtime API and its access levels, stats page, the configuration file, security)
+- [docs/clients.md](docs/clients.md): the Runtime API commands the server sends
+- [docs/design.md](docs/design.md): how it is built and why
+
 ## Installation
 
 There are no published releases, packages or images of this fork yet; build it from source (Go 1.25 or later).
@@ -46,6 +53,13 @@ go build -o bin/haproxy-mcp-server ./cmd     # or: make build
 ### Using Docker
 
 ```bash
+make docker-build                       # image haproxy-mcp-server:<version> and :latest, with the version information
+make docker-run CONFIG=config.toml PORT=8080   # run it with your configuration, published on host port 8080
+```
+
+which is the same as:
+
+```bash
 docker build -t haproxy-mcp-server \
   --build-arg GIT_VERSION=$(git describe --tags --always --dirty) \
   --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) \
@@ -54,6 +68,8 @@ docker run -d --name haproxy-mcp -p 8080:8080 \
   -v $(pwd)/config.toml:/app/config.toml:ro \
   haproxy-mcp-server
 ```
+
+(`make docker-build` uses the date of the commit as the build date instead of the current time: a date that changes on every call defeats Docker's layer cache and recompiles the program each time.)
 
 The build arguments are optional; they set the version printed by `--version` (`docker run --rm haproxy-mcp-server --version`), shown in the startup log and in the image labels. The image runs as an unprivileged user and starts with `--config /app/config.toml`, so mount your configuration there (or pass another path: `haproxy-mcp-server --config /etc/haproxy-mcp/config.toml`). The server speaks MCP over HTTP on port 8080 unless `[mcp]` in the configuration says otherwise. Settings and credentials can be passed as environment variables, which win over the file, for example `-e HAPROXY_PROD_STATS_URL=http://user:pass@host:8404/stats`. Keep the default port 8080 inside the container and map it to whatever you need outside (`-p 9000:8080`): the image's health check calls `http://127.0.0.1:8080/healthz`.
 
@@ -84,7 +100,7 @@ Write a `config.toml` describing your HAProxy instances (see [Configuration](#co
 
 The `env` block is optional; it is the place for sensitive values overriding the file (here the stats URL of the `prod` instance, with credentials). Each instance can use the Runtime API over TCP4 or a Unix socket, the stats page, or both; an instance with only the stats page offers the read-only tools.
 
-> **Note:** For detailed instructions on how to configure HAProxy to expose the Runtime API and Statistics page, see the [HAProxy Configuration Guide](haproxy.md).
+> **Note:** For detailed instructions on how to configure HAProxy to expose the Runtime API and Statistics page, see the [HAProxy Configuration Guide](docs/haproxy.md).
 
 ## Available MCP Tools
 
@@ -174,7 +190,7 @@ An instance needs **stats or runtime** (or both); **config** is optional and onl
 
 **Staleness.** The configuration file is a copy, not what HAProxy has loaded. When the instance has a Runtime API, the server compares the file's modification time with the HAProxy process start time (`show info`) and adds a warning to `show_config` and to the overview tools if the file is newer, i.e. edited but not yet reloaded or restarted.
 
-**What each tool gets, and loses, without a source** (details per tool in [tools.md](tools.md#what-each-tool-needs)):
+**What each tool gets, and loses, without a source** (details per tool in [tools.md](docs/tools.md#what-each-tool-needs)):
 
 | Tool | stats only | runtime only | + config |
 | --- | --- | --- | --- |
@@ -216,7 +232,7 @@ HAProxy does not expose the `bind` IPs or the `default_backend`/`use_backend` ru
 - **Unix Socket Permissions**: When using Unix socket mode, ensure proper socket file permissions
 - **Input Validation**: All inputs are validated to prevent injection attacks
 
-For comprehensive security best practices and configuration examples, see the [HAProxy Configuration Guide](haproxy.md#security-considerations).
+For comprehensive security best practices and configuration examples, see the [HAProxy Configuration Guide](docs/haproxy.md#security-considerations).
 
 ## Development
 
