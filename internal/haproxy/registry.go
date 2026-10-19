@@ -194,6 +194,17 @@ func (r *Registry) AnyStats() bool {
 	return false
 }
 
+// Counts returns how many instances are configured and how many of them are available.
+func (r *Registry) Counts() (total, available int) {
+	for _, i := range r.instances {
+		total++
+		if i.Available() {
+			available++
+		}
+	}
+	return total, available
+}
+
 // ConnectAll tries to connect every unavailable instance concurrently and returns how many are
 // available afterwards.
 func (r *Registry) ConnectAll() int {

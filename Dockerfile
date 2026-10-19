@@ -1,6 +1,6 @@
 # Use the official Golang image to create a build artifact.
 # This is the builder stage.
-FROM golang:1.24-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Set the Current Working Directory inside the container
 WORKDIR /app
@@ -14,15 +14,42 @@ RUN go mod download
 # Copy the source code into the container
 COPY . .
 
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=none
+ARG GIT_VERSION=dev
+ARG TARGETOS
+ARG TARGETARCH
+
 # Build the Go app
-# -ldflags="-w -s" reduces the size of the binary by removing debug information.
+# -ldflags="-s -w" reduces the size of the binary by removing debug information.
 # CGO_ENABLED=0 disables CGO for static linking, useful for alpine base images.
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o ./haproxy-mcp ./cmd/
+RUN echo "Building version: ${GIT_VERSION}" && \
+    echo "Commit: ${GIT_COMMIT}" && \
+    echo "Build date: ${BUILD_DATE}" && \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
+      -trimpath \
+      -o ./haproxy-mcp \
+      -ldflags="-s -w \
+        -X main.GitVersion=${GIT_VERSION} \
+        -X main.GitCommit=${GIT_COMMIT} \
+        -X main.BuildDate=${BUILD_DATE}" \
+       ./cmd/
 
 # --- Start final stage --- #
 
 # Use a minimal base image like Alpine Linux
 FROM docker.io/library/alpine:3.23
+
+ARG BUILD_DATE=unknown
+ARG GIT_COMMIT=none
+ARG GIT_VERSION=dev
+
+LABEL org.opencontainers.image.created=$BUILD_DATE \
+      org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.version=$GIT_VERSION \
+      org.opencontainers.image.title="haproxy-mcp" \
+      org.opencontainers.image.source="https://github.com/bondar-aleksandr/haproxy-mcp-server" \
+      org.opencontainers.image.description="HAProxy MCP server"
 
 RUN addgroup -g 1010 haproxy-mcp && \
     adduser -S -u 1010 -G haproxy-mcp -D haproxy-mcp
@@ -40,20 +67,16 @@ COPY --from=builder /app/haproxy-mcp .
 RUN chown -R haproxy-mcp:haproxy-mcp /app
 USER haproxy-mcp
 
-# Default environment variables for HAProxy connection
-ENV HAPROXY_HOST="172.18.62.7"
-ENV HAPROXY_PORT="9999"
-ENV HAPROXY_RUNTIME_MODE="tcp4"
-ENV HAPROXY_RUNTIME_TIMEOUT="10"
-ENV HAPROXY_STATS_ENABLED="true"
-ENV HAPROXY_STATS_URL="http://172.18.62.6:8404/stats"
-ENV HAPROXY_STATS_TIMEOUT="5"
-ENV MCP_TRANSPORT="http"
-ENV MCP_PORT="8082"
-ENV LOG_LEVEL="info"
-
 # Expose port if using HTTP transport
-EXPOSE ${MCP_PORT}
+EXPOSE 8080
+
+# Liveness: /healthz answers while the process is up and serving; it does not depend on HAProxy being
+# reachable (instances are retried in the background and the server runs with none available).
+# The container is expected to listen on the default port 8080 (the HTTP transport): map it to any
+# port outside with -p. --start-period covers the startup connection attempts to unreachable instances.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
 
 # Command to run the executable
 ENTRYPOINT ["/app/haproxy-mcp"]
+CMD ["--config", "/app/config.toml"]

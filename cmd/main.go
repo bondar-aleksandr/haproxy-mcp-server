@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -21,9 +22,16 @@ import (
 )
 
 func main() {
-	// --- Configuration ---
+	// --- Command line ---
 	configPath := flag.String("config", "", "path to the TOML configuration file defining the HAProxy instances (required; environment variables override its values)")
+	showVersion := flag.Bool("version", false, "print version information and exit")
 	flag.Parse()
+	if *showVersion || (flag.NArg() == 1 && flag.Arg(0) == "version") { // --version, or the "version" subcommand
+		printVersion(os.Stdout)
+		return
+	}
+
+	// --- Configuration ---
 
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
@@ -61,7 +69,7 @@ func main() {
 	}
 	slog.SetDefault(slog.New(handler))
 
-	slog.Info("Starting HAProxy MCP Server...")
+	slog.Info("Starting HAProxy MCP Server...", "version", GitVersion, "commit", GitCommit, "build_date", BuildDate)
 	if *configPath != "" {
 		slog.Info("Using configuration file", "path", *configPath)
 	}
@@ -88,7 +96,7 @@ func main() {
 
 	// --- MCP Server ---
 	// Create MCP Server with name and version
-	mcpServer := server.NewMCPServer("haproxy-mcp-server", "0.1.0")
+	mcpServer := server.NewMCPServer("haproxy-mcp-server", GitVersion)
 
 	// --- Register Tools ---
 	mcp.RegisterTools(mcpServer, registry) // Use mcp.RegisterTools instead of tools.RegisterTools
@@ -112,7 +120,7 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("Starting HTTP server for MCP http transport", "address", addr)
-		if err := serveHTTP(ctx, mcpServer, ln, 5*time.Second); err != nil {
+		if err := serveHTTP(ctx, mcpServer, registry, ln, 5*time.Second); err != nil {
 			slog.Error("HTTP server failed", "error", err)
 			os.Exit(1)
 		}
@@ -175,9 +183,32 @@ func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string, first boo
 	return client, nil
 }
 
-// serveHTTP serves the MCP server over HTTP at /mcp on ln until ctx is done, then shuts down within
-// grace. A request still running after grace is cut off (logged, not an error).
-func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, ln net.Listener, grace time.Duration) error {
+// healthHandler answers /healthz: whether the process is up and serving, for container and
+// orchestrator health checks. It is liveness only, deliberately not tied to HAProxy: restarting this
+// server does not fix an unreachable HAProxy, the instances are retried in the background, and the
+// server is meant to run with none of them available. The counts are informative; no names, URLs or
+// errors are given out.
+func healthHandler(reg *haproxy.Registry) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		total, available := reg.Counts()
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":    "ok",
+			"instances": map[string]int{"total": total, "available": available},
+		})
+	})
+}
+
+// serveHTTP serves the MCP server over HTTP at /mcp, and the health check at /healthz, on ln until
+// ctx is done, then shuts down within grace. A request still running after grace is cut off (logged,
+// not an error).
+func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Registry, ln net.Listener, grace time.Duration) error {
 	// The MCP endpoint, served by our own http.Server so that its timeouts and shutdown are ours.
 	mux := http.NewServeMux()
 	httpServer := &http.Server{Handler: mux}
@@ -186,6 +217,7 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, ln net.Listener
 		server.WithStreamableHTTPServer(httpServer), // lets mcpHandler.Shutdown stop it
 	)
 	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/healthz", healthHandler(reg))
 
 	failed := make(chan error, 1)
 	go func() {

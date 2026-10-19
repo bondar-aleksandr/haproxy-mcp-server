@@ -46,13 +46,20 @@ go build -o bin/haproxy-mcp-server ./cmd     # or: make build
 ### Using Docker
 
 ```bash
-docker build -t haproxy-mcp-server .
-docker run -d --name haproxy-mcp -p 8082:8082 \
-  -v $(pwd)/config.toml:/etc/haproxy-mcp/config.toml:ro \
-  haproxy-mcp-server --config /etc/haproxy-mcp/config.toml
+docker build -t haproxy-mcp-server \
+  --build-arg GIT_VERSION=$(git describe --tags --always --dirty) \
+  --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) \
+  --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) .
+docker run -d --name haproxy-mcp -p 8080:8080 \
+  -v $(pwd)/config.toml:/app/config.toml:ro \
+  haproxy-mcp-server
 ```
 
-The image runs as an unprivileged user and sets `MCP_TRANSPORT=http` and `MCP_PORT=8082`; as with any setting, the environment wins over `config.toml` (override with `-e`). Pass credentials the same way, for example `-e HAPROXY_PROD_STATS_URL=http://user:pass@host:8404/stats`.
+The build arguments are optional; they set the version printed by `--version` (`docker run --rm haproxy-mcp-server --version`), shown in the startup log and in the image labels. The image runs as an unprivileged user and starts with `--config /app/config.toml`, so mount your configuration there (or pass another path: `haproxy-mcp-server --config /etc/haproxy-mcp/config.toml`). The server speaks MCP over HTTP on port 8080 unless `[mcp]` in the configuration says otherwise. Settings and credentials can be passed as environment variables, which win over the file, for example `-e HAPROXY_PROD_STATS_URL=http://user:pass@host:8404/stats`. Keep the default port 8080 inside the container and map it to whatever you need outside (`-p 9000:8080`): the image's health check calls `http://127.0.0.1:8080/healthz`.
+
+**Health check.** With the HTTP transport the server answers `GET /healthz` with `200` and `{"status":"ok","instances":{"total":2,"available":1}}` for as long as it is up and serving. It is liveness only and deliberately does not depend on HAProxy: instances are retried in the background and the server is meant to run with none of them available (see `status` in the `haproxy://instances` resource, or the counts above, to monitor those). The counts are all it gives out, no names, URLs or errors. The Dockerfile uses it as its `HEALTHCHECK` (every 30 s, 15 s start period); outside Docker, point a Kubernetes `livenessProbe` or a load balancer at it. The stdio transport has no HTTP port, hence no health check.
+
+The build context excludes `.git`, `*.cfg` and `live_data/` (see `.dockerignore`), so a real `haproxy.cfg` is not copied into the image layers.
 
 ## MCP Integration
 

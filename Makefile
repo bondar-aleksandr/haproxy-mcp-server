@@ -4,11 +4,13 @@
 BINARY_NAME ?= $(shell grep -m 1 '^module ' go.mod 2>/dev/null | sed 's/^module github.com\/[^\/]*\/\([^\/]*\).*/\1/' || basename $$(pwd))
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR=bin
+GIT_COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Build the application
 build:
 	mkdir -p $(BUILD_DIR)
-	go build -ldflags "-X main.Version=$(VERSION)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd
+	go build -ldflags "-X main.GitVersion=$(VERSION) -X main.GitCommit=$(GIT_COMMIT) -X main.BuildDate=$(BUILD_DATE)" -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd
 
 # Run tests
 test:

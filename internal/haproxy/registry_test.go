@@ -143,3 +143,17 @@ func TestLastError(t *testing.T) {
 		t.Errorf("the same failure must read the same: %q vs %q", inst.LastError(), first)
 	}
 }
+
+func TestCounts(t *testing.T) {
+	up := &Instance{Name: "up"}
+	up.SetClient(&HAProxyClient{})
+	down := &Instance{Name: "down"}
+	reg, _ := NewRegistry(up, down)
+	if total, available := reg.Counts(); total != 2 || available != 1 {
+		t.Errorf("Counts = %d, %d", total, available)
+	}
+	down.SetClient(&HAProxyClient{})
+	if total, available := reg.Counts(); total != 2 || available != 2 {
+		t.Errorf("after recovery Counts = %d, %d", total, available)
+	}
+}

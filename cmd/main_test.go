@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/config"
+	"github.com/bondar-aleksandr/haproxy-mcp-server/internal/haproxy"
 )
 
 func TestNewRegistryKeepsUnreachableInstances(t *testing.T) {
@@ -61,7 +65,7 @@ func TestServeHTTPShutdownWithOpenStream(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	done := make(chan error, 1)
-	go func() { done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), ln, 10*time.Second) }()
+	go func() { done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, 10*time.Second) }()
 
 	url := "http://" + ln.Addr().String() + "/mcp"
 	post := func(session, body string) *http.Response {
@@ -108,5 +112,82 @@ func TestServeHTTPShutdownWithOpenStream(t *testing.T) {
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("shutdown did not finish: an open event stream blocks it")
+	}
+}
+
+func TestPrintVersion(t *testing.T) {
+	oldV, oldC, oldB := GitVersion, GitCommit, BuildDate
+	defer func() { GitVersion, GitCommit, BuildDate = oldV, oldC, oldB }()
+	GitVersion, GitCommit, BuildDate = "v1.2.3", "abc1234", "2026-01-02T03:04:05Z"
+
+	var out strings.Builder
+	printVersion(&out)
+	for _, want := range []string{"Version: v1.2.3", "Commit: abc1234", "Build Date: 2026-01-02T03:04:05Z", "GoVersion: go", "Platform: "} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q in:\n%s", want, out.String())
+		}
+	}
+}
+
+// testRegistry has two instances: "up" is connected, "down" is not.
+func testRegistry(t *testing.T) *haproxy.Registry {
+	t.Helper()
+	up := &haproxy.Instance{Name: "up", StatsURL: "http://u:secret@10.0.0.1:8404/stats"}
+	up.SetClient(&haproxy.HAProxyClient{})
+	down := &haproxy.Instance{Name: "down", StatsURL: "http://10.0.0.2:8404/stats", Connect: func() (*haproxy.HAProxyClient, error) {
+		return nil, errors.New("dial tcp 10.0.0.2:8404: connection refused")
+	}}
+	_ = down.TryConnect()
+	reg, err := haproxy.NewRegistry(up, down)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reg
+}
+
+func TestHealthz(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, 5*time.Second) }()
+	defer func() { stop(); <-done }()
+	url := "http://" + ln.Addr().String() + "/healthz"
+
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := new(strings.Builder)
+	_, _ = io.Copy(body, resp.Body)
+	_ = resp.Body.Close()
+	var got struct {
+		Status    string         `json:"status"`
+		Instances map[string]int `json:"instances"`
+	}
+	if err := json.Unmarshal([]byte(body.String()), &got); err != nil {
+		t.Fatalf("body %q: %v", body.String(), err)
+	}
+	// Healthy although one of the two instances is unavailable: this is liveness, not HAProxy's state.
+	if resp.StatusCode != http.StatusOK || got.Status != "ok" || got.Instances["total"] != 2 || got.Instances["available"] != 1 {
+		t.Errorf("GET /healthz = %d %q", resp.StatusCode, body.String())
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+	// Exactly the counts: nothing that identifies an instance (name, URL, error) is given out.
+	if want := `{"instances":{"available":1,"total":2},"status":"ok"}` + "\n"; body.String() != want {
+		t.Errorf("body %q, want %q", body.String(), want)
+	}
+
+	head, err := http.Head(url)
+	if err != nil || head.StatusCode != http.StatusOK {
+		t.Errorf("HEAD /healthz = %v %v", head, err)
+	}
+	post, err := http.Post(url, "text/plain", nil)
+	if err != nil || post.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("POST /healthz = %v %v", post, err)
 	}
 }
