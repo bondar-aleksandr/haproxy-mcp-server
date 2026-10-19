@@ -56,24 +56,24 @@ func NewHAProxyClient(runtimeAPIURL string, statsURL string) (*HAProxyClient, er
 
 	// Initialize runtime client if URL is provided
 	if runtimeAPIURL != "" {
-		slog.Info("Initializing HAProxy Runtime API client", "url", config.RedactURL(runtimeAPIURL))
+		slog.Debug("Initializing HAProxy Runtime API client", "url", config.RedactURL(runtimeAPIURL))
 		runtimeClient, err := runtimeclient.NewHAProxyClient(runtimeAPIURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize HAProxy Runtime API client: %w", err)
 		}
 		client.RuntimeClient = runtimeClient
-		slog.Info("HAProxy Runtime API client initialized successfully")
+		slog.Debug("HAProxy Runtime API client initialized successfully")
 	}
 
 	// Initialize stats client if URL is provided
 	if statsURL != "" {
-		slog.Info("Initializing HAProxy Stats client", "url", config.RedactURL(statsURL))
+		slog.Debug("Initializing HAProxy Stats client", "url", config.RedactURL(statsURL))
 		statsClient, err := statsclient.NewStatsClient(statsURL)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize HAProxy Stats client: %w", err)
 		}
 		client.StatsClient = statsClient
-		slog.Info("HAProxy Stats client initialized successfully")
+		slog.Debug("HAProxy Stats client initialized successfully")
 	}
 
 	// Ensure at least one client is initialized

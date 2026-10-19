@@ -4,10 +4,6 @@
 package hacfg
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -45,39 +41,14 @@ type Route struct {
 	ACLs      map[string]string // definitions of the named ACLs used in the condition
 }
 
-// Load reads the configuration at path: a file, or a directory of *.cfg files read in name order
-// (like "haproxy -f <dir>").
+// Load reads and parses the configuration at path: a file, or a directory of *.cfg files read in
+// name order (like "haproxy -f <dir>").
 func Load(path string) (*Config, error) {
-	info, err := os.Stat(path)
+	src, err := ReadSource(path)
 	if err != nil {
 		return nil, err
 	}
-	var text strings.Builder
-	if info.IsDir() {
-		files, err := filepath.Glob(filepath.Join(path, "*.cfg"))
-		if err != nil {
-			return nil, err
-		}
-		sort.Strings(files)
-		if len(files) == 0 {
-			return nil, fmt.Errorf("no *.cfg file in %s", path)
-		}
-		for _, f := range files {
-			data, err := os.ReadFile(f)
-			if err != nil {
-				return nil, err
-			}
-			text.Write(data)
-			text.WriteByte('\n')
-		}
-	} else {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil, err
-		}
-		text.Write(data)
-	}
-	return Parse(text.String()), nil
+	return Parse(src.Text), nil
 }
 
 var sectionKeywords = map[string]bool{

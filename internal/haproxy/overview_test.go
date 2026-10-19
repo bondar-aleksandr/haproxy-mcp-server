@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 const topologyStat = "# pxname,svname,qcur,scur,smax,slim,stot,bin,bout,status,weight,type,mode,algo,addr,check_status,act,bck,hrsp_4xx,hrsp_5xx,iid,sid,\n" +
@@ -54,7 +56,18 @@ const topologyServersState = `1
 `
 
 // topologyRuntime answers the Runtime API commands the overview tools use.
-type topologyRuntime struct{ RuntimeClient }
+type topologyRuntime struct {
+	RuntimeClient
+	started time.Time // when "show info" says the process started; zero: well after any file
+}
+
+func (r topologyRuntime) GetProcessInfo() (map[string]string, error) {
+	started := r.started
+	if started.IsZero() {
+		started = time.Now().Add(24 * time.Hour)
+	}
+	return map[string]string{"Start_time_sec": strconv.FormatInt(started.Unix(), 10)}, nil
+}
 
 func (topologyRuntime) ExecuteRuntimeCommand(cmd string) (string, error) {
 	switch cmd {
@@ -468,5 +481,88 @@ func TestDebugCounters(t *testing.T) {
 	if got[0].Count != 3 || got[0].Type != "GLT" || !strings.HasPrefix(got[0].Location, "h2.c:5124 h2_detect_glitch()") ||
 		got[1].Count != 12 || !strings.Contains(got[1].Location, "[note]") {
 		t.Errorf("unexpected counters: %+v", got)
+	}
+}
+
+func TestConfigDriftWarning(t *testing.T) {
+	path := writeCfg(t, topologyCfg)
+	modified := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, modified, modified); err != nil {
+		t.Fatal(err)
+	}
+
+	// HAProxy started after the file was last modified: nothing to say.
+	c := &HAProxyClient{RuntimeClient: topologyRuntime{started: modified.Add(time.Minute)}, ConfigFile: path}
+	if top, err := c.topology(DetailTerse); err != nil || len(top.Warnings) != 0 {
+		t.Fatalf("%v, %v", top, err)
+	}
+
+	// The file was edited after HAProxy started: the overview says it may not be what is running.
+	c = &HAProxyClient{RuntimeClient: topologyRuntime{started: modified.Add(-time.Minute)}, ConfigFile: path}
+	top, err := c.topology(DetailTerse)
+	if err != nil || len(top.Warnings) != 1 || !strings.Contains(top.Warnings[0], "after HAProxy started") {
+		t.Fatalf("expected a drift warning, got %v, %v", top.Warnings, err)
+	}
+
+	// Without a Runtime API the start time is unknown: no claim either way.
+	c = &HAProxyClient{StatsClient: nil, ConfigFile: path}
+	if w := c.configDrift(modified); w != "" {
+		t.Errorf("no runtime, no warning: %q", w)
+	}
+}
+
+func instanceWithConfig(t *testing.T, text string) *Instance {
+	t.Helper()
+	return &Instance{Name: "prod", ConfigFile: writeCfg(t, text)}
+}
+
+func TestShowConfig(t *testing.T) {
+	text := `global
+    setenv ACCOUNT_THUMBPRINT 'abc123'
+
+# sites
+frontend web_FE
+    bind :80
+    stats auth admin:hunter2
+
+backend app_BE
+    server a 10.0.0.1:80 check
+`
+	inst := instanceWithConfig(t, text)
+
+	d, err := inst.ShowConfig("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(d.Text, "abc123") || strings.Contains(d.Text, "hunter2") || d.Redacted != 2 || d.Lines != 10 || d.Sections != nil {
+		t.Errorf("whole config: redacted=%d lines=%d\n%s", d.Redacted, d.Lines, d.Text)
+	}
+	if !strings.Contains(d.Text, "# sites\nfrontend web_FE\n    bind :80\n") || !strings.Contains(d.Text, "setenv ACCOUNT_THUMBPRINT <redacted>") {
+		t.Errorf("the rest must stay as written:\n%s", d.Text)
+	}
+
+	d, err = inst.ShowConfig("web_FE")
+	if err != nil || len(d.Sections) != 1 || d.Sections[0].Header != "frontend web_FE" || d.Sections[0].FirstLine != 4 ||
+		d.Redacted != 1 || strings.Contains(d.Text, "global") || strings.Contains(d.Text, "app_BE") {
+		t.Errorf("filtered: %+v\n%s (%v)", d, d.Text, err)
+	}
+
+	if _, err := inst.ShowConfig("nope"); err == nil || !strings.Contains(err.Error(), "global, frontend web_FE, backend app_BE") {
+		t.Errorf("no match should list the sections, got %v", err)
+	}
+	if _, err := (&Instance{Name: "x"}).ShowConfig(""); err == nil || !strings.Contains(err.Error(), "no config_file") {
+		t.Errorf("no config_file: %v", err)
+	}
+	if _, err := (&Instance{Name: "x", ConfigFile: "/nonexistent/haproxy.cfg"}).ShowConfig(""); err == nil {
+		t.Error("an unreadable file must fail")
+	}
+
+	// The drift check uses the instance's client when it is connected.
+	path := inst.ConfigFile
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(path, old, old)
+	inst.SetClient(&HAProxyClient{RuntimeClient: topologyRuntime{started: old.Add(-time.Hour)}})
+	if d, _ := inst.ShowConfig(""); len(d.Warnings) != 1 {
+		t.Errorf("drift warning expected: %v", d.Warnings)
 	}
 }

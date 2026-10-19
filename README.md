@@ -93,6 +93,7 @@ The server provides read-only inspection tools; it deliberately has no tools tha
 | `list_frontends` | Frontends: status, binds, routes, counters |
 | `list_backends` | Backends and their servers: status, health, counters, frontends using them |
 | `show_stat` | Raw statistics table (optional name filter) |
+| `show_config` | The raw `haproxy.cfg`, credentials masked (optional section filter); needs `config_file` |
 | `show_info`, `debug_counters` | Process information, internal rare-event counters |
 | `clear_counters_all` | Reset statistics counters |
 
@@ -166,6 +167,10 @@ An instance needs **stats or runtime** (or both); **config** is optional and onl
 
 **Access level of the Runtime API socket.** HAProxy refuses commands above the level of the socket (`stats socket ... level user|operator|admin`). Checked on HAProxy 3.0.9: at `user`, `show info`, `show stat` and `show servers state` work; `show fd` and `debug counters` need `operator`; `clear counters all` is documented by HAProxy as `admin` only. A refused command is reported as an error (`HAProxy refused "show fd": Permission denied`), and a failing `show fd` becomes a warning in the overview tools instead of silently missing binds.
 
+**`show_config` and the raw configuration.** `show_config` returns the instance's `haproxy.cfg` as written, comments included, so that the model can see what the structured tools do not show (redirects, `deny`/`return` rules, timeouts, server options, caching, global settings). An optional `filter` returns only the sections whose header contains it (`frontend web_FE`, `backend app_BE`, `global`, `defaults`). It reads only the configured `config_file` (there is no path argument). Values that look like credentials are masked as `<redacted>` (`stats auth` passwords, `userlist` passwords, `setenv` values, credential-like headers and the values ACLs match on them, `Basic`/`Bearer` tokens, passwords in URLs); this is pattern matching and not a guarantee, so keep secrets out of the file where you can, and check the result before pointing a model you do not control at a sensitive configuration. The result starts with a JSON summary (file, modification time, line ranges of the returned sections, number of masked values, warnings) followed by the text.
+
+**Staleness.** The configuration file is a copy, not what HAProxy has loaded. When the instance has a Runtime API, the server compares the file's modification time with the HAProxy process start time (`show info`) and adds a warning to `show_config` and to the overview tools if the file is newer, i.e. edited but not yet reloaded or restarted.
+
 **What each tool gets, and loses, without a source** (details per tool in [tools.md](tools.md#what-each-tool-needs)):
 
 | Tool | stats only | runtime only | + config |
@@ -174,6 +179,7 @@ An instance needs **stats or runtime** (or both); **config** is optional and onl
 | `list_frontends` | Status, mode, counters; no binds, no backends | + listening ports | + bind addresses and endpoints, `backends`, routes with ACLs |
 | `list_backends` | Status, servers, health, counters; no `state` | + servers' **operational state** (`RUNNING`, ...), full state rows | + `used_by` (the frontends routing to each backend) |
 | `show_stat` | Yes (143 columns) | Yes (raw CSV, ~200 columns, many empty) | no change |
+| `show_config` | **not available** without `config_file`; with it, works even when HAProxy is unreachable | same | the raw file (credentials masked) |
 | `show_info` | **not available** | Yes | no change |
 | `debug_counters`, `clear_counters_all` | **not available** | Yes (operator / admin socket) | no change |
 

@@ -59,6 +59,13 @@ func (i *Instance) Client() (*HAProxyClient, error) {
 	return i.client, nil
 }
 
+// LastError returns the (credential-free) reason the last connection attempt failed, or "".
+func (i *Instance) LastError() string {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	return i.lastErr
+}
+
 // Available reports whether the instance is connected.
 func (i *Instance) Available() bool {
 	i.mu.RLock()
@@ -167,6 +174,16 @@ func (r *Registry) AnyRuntime() bool {
 	return false
 }
 
+// AnyConfig reports whether a config_file is configured for at least one instance.
+func (r *Registry) AnyConfig() bool {
+	for _, i := range r.instances {
+		if i.ConfigFile != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // AnyStats reports whether the stats page is configured for at least one instance.
 func (r *Registry) AnyStats() bool {
 	for _, i := range r.instances {
@@ -232,8 +249,14 @@ func (r *Registry) Retry(ctx context.Context, interval time.Duration) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
+				before := inst.LastError()
 				if err := inst.TryConnect(); err != nil {
-					slog.Debug("HAProxy instance still unavailable", "instance", inst.Name, "error", err)
+					// A failure that repeats unchanged is not news; a different reason is.
+					if inst.LastError() != before {
+						slog.Warn("HAProxy instance still unavailable, with a different error", "instance", inst.Name, "error", err)
+					} else {
+						slog.Debug("HAProxy instance still unavailable", "instance", inst.Name, "error", err)
+					}
 				} else {
 					slog.Info("HAProxy instance is now available", "instance", inst.Name)
 				}

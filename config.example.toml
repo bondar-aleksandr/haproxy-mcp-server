@@ -40,8 +40,9 @@ description = "Production edge"
 # haproxy.cfg of this instance, as readable from this server (a file, or a directory of *.cfg files).
 # Optional, but the only way to learn the bind IPs of the frontends and which backends they route to
 # (default_backend / use_backend): neither the Runtime API nor the stats page exposes them. It is
-# re-read when it changes. Mount or copy it if HAProxy runs elsewhere.                # HAPROXY_PROD_CONFIG_FILE
-config_file = "prod_haproxy.cfg"
+# re-read when it changes. Mount or copy it if HAProxy runs elsewhere. The show_config tool returns it
+# raw (credentials masked), so it is also what the model sees of this instance's configuration.                # HAPROXY_PROD_CONFIG_FILE
+config_file = "live_data/prod_haproxy.cfg"
 
 [instances.prod.runtime]
 mode = "tcp4"                                # "tcp4" or "unix"; empty = no Runtime API   # HAPROXY_PROD_RUNTIME_MODE

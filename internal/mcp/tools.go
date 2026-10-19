@@ -25,6 +25,7 @@ func RegisterTools(s *server.MCPServer, reg *haproxy.Registry) {
     slog.Info("Registering HAProxy MCP tools...", "instances", reg.Names(), "runtime_api", reg.AnyRuntime(), "stats_api", reg.AnyStats())
     registerInstancesResource(s, reg)
     registerStatTools(s, reg)
+    registerConfigTool(s, reg)
     registerFrontendTools(s, reg)
     registerBackendTools(s, reg)
     slog.Info("All HAProxy MCP tools registered successfully")
@@ -63,6 +64,30 @@ func addTool(s *server.MCPServer, reg *haproxy.Registry, tool mcp.Tool, needRunt
         }
         slog.InfoContext(ctx, "Selected HAProxy instance", "instance", inst.Name, "tool", req.Params.Name)
         return h(ctx, req, client)
+    })
+}
+
+// configHandler is a tool handler that works on the config_file of the selected instance.
+type configHandler func(ctx context.Context, req mcp.CallToolRequest, inst *haproxy.Instance) (*mcp.CallToolResult, error)
+
+// addConfigTool registers a tool that reads the instance's config_file. It needs no connection to
+// HAProxy, so it works for an instance that is currently unavailable, and fails for instances that
+// have no config_file. It is not registered while no instance has one.
+func addConfigTool(s *server.MCPServer, reg *haproxy.Registry, tool mcp.Tool, h configHandler) {
+    if !reg.AnyConfig() {
+        slog.Info("No instance has a config_file, skipping tool", "tool", tool.Name)
+        return
+    }
+    s.AddTool(withInstanceParam(tool, reg), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+        inst, err := reg.Resolve(getString(req, instanceParam))
+        if err != nil {
+            return mcp.NewToolResultError(err.Error()), nil
+        }
+        if inst.ConfigFile == "" {
+            return mcp.NewToolResultError(fmt.Sprintf("tool %s is not available for instance %q: it has no config_file configured", req.Params.Name, inst.Name)), nil
+        }
+        slog.InfoContext(ctx, "Selected HAProxy instance", "instance", inst.Name, "tool", req.Params.Name)
+        return h(ctx, req, inst)
     })
 }
 

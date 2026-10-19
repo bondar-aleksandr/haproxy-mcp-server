@@ -50,6 +50,15 @@ An instance has up to three sources (see the README, "What the server can see"):
 
 With both sources the stats page is used and the runtime is the fallback if the page fails.
 
+### show_config
+
+| | stats | runtime | config |
+| --- | --- | --- | --- |
+| The raw `haproxy.cfg`, optional `filter` on the section header | — | — | **required**: reads only `config_file`; works even if HAProxy is unreachable |
+| Warning that the file is newer than the running process | — | **yes** (compares with the start time from `show info`) | |
+
+Not registered while no instance has a `config_file`; fails for instances without one.
+
 ### show_info, debug_counters, clear_counters_all
 
 | Tool | stats | runtime | config |
@@ -105,6 +114,13 @@ The raw statistics table.
 - **Source**: the stats page, or `show stat`
 - **Input**: Optional `filter`, a substring of a proxy or server name (applied by the server)
 - **Output**: One row per frontend, backend and server with every column HAProxy reports
+
+### show_config
+The raw configuration file of the instance, as written (comments kept), with credential-looking values masked as `<redacted>`.
+- **Source**: the instance's `config_file` (a file, or a directory of `*.cfg` files joined in name order, each preceded by a `# ==> name <==` line)
+- **Input**: Optional `filter`: only the sections whose header contains it (`frontend web_FE`, `backend app_BE`, `global`, `defaults`; the `defaults` settings apply to the sections after them), separated by a blank line. A filter that matches nothing fails and lists the section headers.
+- **Output**: Two text items. First a JSON summary: `instance`, `config_file`, `modified`, `lines` (of the whole configuration), `sections` (header, `first_line`, `last_line` of each returned section; only with a filter), `redacted_values`, `warnings` (for instance that the file is newer than the running process). Second the configuration text.
+- **Masking**: best effort, see the README; a secret written in a way not covered is not masked.
 
 ### show_info
 Version, uptime, limits and connection figures of the HAProxy process.

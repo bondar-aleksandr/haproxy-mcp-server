@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -163,13 +162,18 @@ func (c *HAProxyClient) topology(level Detail) (*Topology, error) {
 	}
 	t := &Topology{}
 
-	cfg, cfgErr := c.loadConfig()
+	cfg, cfgModified, cfgErr := c.loadConfig()
 	switch {
 	case cfgErr != nil:
 		slog.Warn("Cannot read the HAProxy configuration file", "file", c.ConfigFile, "error", cfgErr)
 		t.Warnings = append(t.Warnings, fmt.Sprintf("config_file %s cannot be read, bind addresses and routes are limited: %v", c.ConfigFile, cfgErr))
 	case cfg == nil:
 		t.Warnings = append(t.Warnings, "no config_file configured for this instance: frontend-to-backend routes are not exposed by the Runtime API or the stats page, and bind IPs are not available")
+	}
+	if cfg != nil {
+		if w := c.configDrift(cfgModified); w != "" {
+			t.Warnings = append(t.Warnings, w)
+		}
 	}
 	frontendCfg := map[string]hacfg.Frontend{}
 	if cfg != nil {
@@ -388,36 +392,36 @@ func routeBackends(routes []RouteInfo) []string {
 // --- configuration file ---
 
 type cachedConfig struct {
-	mu     sync.Mutex
-	loaded time.Time // modification time of what was parsed
-	size   int64
-	parsed *hacfg.Config
-	path   string
+	mu       sync.Mutex
+	modified time.Time // latest modification time of the files that were parsed
+	size     int64
+	parsed   *hacfg.Config
+	path     string
 }
 
-// loadConfig returns the parsed configuration file, or nil when none is configured. The file is
-// re-read when it changes.
-func (c *HAProxyClient) loadConfig() (*hacfg.Config, error) {
+// loadConfig returns the parsed configuration file (nil when none is configured) and its
+// modification time. The file, or any file of a configuration directory, is re-read when it changes.
+func (c *HAProxyClient) loadConfig() (*hacfg.Config, time.Time, error) {
 	if c.ConfigFile == "" {
-		return nil, nil
+		return nil, time.Time{}, nil
 	}
 	cache := &c.cfgCache
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
 
-	info, err := os.Stat(c.ConfigFile)
+	modified, size, err := hacfg.Stat(c.ConfigFile)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	if cache.parsed != nil && cache.path == c.ConfigFile && info.ModTime().Equal(cache.loaded) && info.Size() == cache.size {
-		return cache.parsed, nil
+	if cache.parsed != nil && cache.path == c.ConfigFile && modified.Equal(cache.modified) && size == cache.size {
+		return cache.parsed, modified, nil
 	}
 	cfg, err := hacfg.Load(c.ConfigFile)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
-	cache.parsed, cache.path, cache.loaded, cache.size = cfg, c.ConfigFile, info.ModTime(), info.Size()
-	return cfg, nil
+	cache.parsed, cache.path, cache.modified, cache.size = cfg, c.ConfigFile, modified, size
+	return cfg, modified, nil
 }
 
 // --- listening sockets (Runtime API) ---
@@ -506,4 +510,30 @@ func (c *HAProxyClient) serverStates() (map[string]map[string]string, string) {
 	}
 	slog.Warn("Cannot read the servers state", "error", err)
 	return nil, fmt.Sprintf("servers state unavailable: %v", err)
+}
+
+// configDrift returns a warning when the configuration file was modified after HAProxy started, i.e.
+// when it may no longer be what HAProxy is running. It needs the Runtime API ("show info" tells when
+// the process started); without it nothing can be said.
+func (c *HAProxyClient) configDrift(modified time.Time) string {
+	if c.RuntimeClient == nil {
+		return ""
+	}
+	info, err := c.RuntimeClient.GetProcessInfo()
+	if err != nil {
+		return ""
+	}
+	secs, err := strconv.ParseInt(info["Start_time_sec"], 10, 64)
+	if err != nil {
+		return ""
+	}
+	return driftWarning(modified, time.Unix(secs, 0))
+}
+
+func driftWarning(modified, started time.Time) string {
+	if !modified.After(started) {
+		return ""
+	}
+	return fmt.Sprintf("the config file was modified at %s, after HAProxy started at %s: it may not be what is running (HAProxy needs a reload or restart to apply it)",
+		modified.UTC().Format(time.RFC3339), started.UTC().Format(time.RFC3339))
 }

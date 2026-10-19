@@ -85,3 +85,15 @@ func TestRefusedCommandIsAnError(t *testing.T) {
 		t.Errorf("a normal response must pass: %q, %v", out, err)
 	}
 }
+
+func TestCleanSocatStderr(t *testing.T) {
+	in := "2026/10/19 12:34:17 socat[1154023] E connect(5, AF=2 127.0.0.1:1, 16): Connection refused\n"
+	again := "2026/10/19 12:35:47 socat[1160002] E connect(5, AF=2 127.0.0.1:1, 16): Connection refused\n"
+	want := "E connect(5, AF=2 127.0.0.1:1, 16): Connection refused"
+	if got := cleanSocatStderr(in); got != want || cleanSocatStderr(again) != want {
+		t.Errorf("got %q and %q, want %q for both", cleanSocatStderr(in), cleanSocatStderr(again), want)
+	}
+	if got := cleanSocatStderr("two\nlines\n"); got != "two\nlines" {
+		t.Errorf("other text must be kept: %q", got)
+	}
+}

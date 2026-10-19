@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -350,5 +352,111 @@ func TestOverviewToolArguments(t *testing.T) {
 	}
 	if res := callTool(t, s, "list_backends", map[string]any{"name": "backend1", "server": "server1", "detail": "full"}); res.IsError {
 		t.Errorf("name+server+full should work: %s", resultText(res))
+	}
+}
+
+func TestShowConfigTool(t *testing.T) {
+	cfgText := `global
+    setenv ACCOUNT_THUMBPRINT 'abc123'
+
+# sites
+frontend web_FE
+    bind :80
+    stats auth admin:hunter2
+
+backend app_BE
+    server a 10.0.0.1:80 check
+`
+	path := filepath.Join(t.TempDir(), "haproxy.cfg")
+	if err := os.WriteFile(path, []byte(cfgText), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withCfg := &haproxy.Instance{Name: "prod", ConfigFile: path, StatsURL: "http://h/stats"}
+	withCfg.SetClient(&haproxy.HAProxyClient{StatsClient: hatesting.NewMockStatsClient()})
+	noCfg := &haproxy.Instance{Name: "edge", StatsURL: "http://h2/stats"}
+	noCfg.SetClient(&haproxy.HAProxyClient{StatsClient: hatesting.NewMockStatsClient()})
+	reg, err := haproxy.NewRegistry(withCfg, noCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := server.NewMCPServer("test", "0")
+	RegisterTools(s, reg)
+
+	tool, ok := s.ListTools()["show_config"]
+	if !ok {
+		t.Fatal("show_config must be registered when an instance has a config_file")
+	}
+	if a := tool.Tool.Annotations; a.ReadOnlyHint == nil || !*a.ReadOnlyHint || a.OpenWorldHint == nil || *a.OpenWorldHint {
+		t.Errorf("show_config must be read-only and closed-world: %+v", a)
+	}
+	if _, ok := tool.Tool.InputSchema.Properties["filter"]; !ok {
+		t.Error("show_config has no filter argument")
+	}
+	if _, ok := tool.Tool.InputSchema.Properties["path"]; ok {
+		t.Error("show_config must not take a path: it only reads the configured file")
+	}
+
+	// The whole file: a summary, then the text, credentials masked, everything else as written.
+	res := callTool(t, s, "show_config", map[string]any{"instance": "prod"})
+	if res.IsError || len(res.Content) != 2 {
+		t.Fatalf("expected a summary and the text: error=%v content=%d %s", res.IsError, len(res.Content), resultText(res))
+	}
+	var meta struct {
+		Instance string `json:"instance"`
+		File     string `json:"config_file"`
+		Lines    int    `json:"lines"`
+		Redacted int    `json:"redacted_values"`
+		Sections []struct {
+			Section string `json:"section"`
+		} `json:"sections"`
+	}
+	if err := json.Unmarshal([]byte(res.Content[0].(mcp.TextContent).Text), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.Instance != "prod" || meta.File != path || meta.Lines != 10 || meta.Redacted != 2 || meta.Sections != nil {
+		t.Errorf("summary: %+v", meta)
+	}
+	text := res.Content[1].(mcp.TextContent).Text
+	want := strings.NewReplacer("'abc123'", "<redacted>", "hunter2", "<redacted>").Replace(cfgText)
+	if text != want {
+		t.Errorf("text:\n got %q\nwant %q", text, want)
+	}
+
+	// With a filter: only the matching sections, and where they are.
+	res = callTool(t, s, "show_config", map[string]any{"instance": "prod", "filter": "app_BE"})
+	if err := json.Unmarshal([]byte(res.Content[0].(mcp.TextContent).Text), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if got := res.Content[1].(mcp.TextContent).Text; got != "backend app_BE\n    server a 10.0.0.1:80 check\n" ||
+		len(meta.Sections) != 1 || meta.Sections[0].Section != "backend app_BE" {
+		t.Errorf("filtered: %q %+v", got, meta)
+	}
+
+	// No match: an error that lists the sections.
+	if res := callTool(t, s, "show_config", map[string]any{"instance": "prod", "filter": "nope"}); !res.IsError || !strings.Contains(resultText(res), "frontend web_FE") {
+		t.Errorf("no match should list the sections: %q", resultText(res))
+	}
+	// An instance without a config_file.
+	if res := callTool(t, s, "show_config", map[string]any{"instance": "edge"}); !res.IsError || !strings.Contains(resultText(res), "no config_file") {
+		t.Errorf("edge has no config_file: %q", resultText(res))
+	}
+
+	// The file does not depend on HAProxy being reachable.
+	down := &haproxy.Instance{Name: "down", ConfigFile: path, StatsURL: "http://h3/stats",
+		Connect: func() (*haproxy.HAProxyClient, error) { return nil, errors.New("unreachable") }}
+	_ = down.TryConnect()
+	reg2, _ := haproxy.NewRegistry(down)
+	s2 := server.NewMCPServer("test", "0")
+	RegisterTools(s2, reg2)
+	if res := callTool(t, s2, "show_config", nil); res.IsError || len(res.Content) != 2 {
+		t.Errorf("an unavailable instance still has its config file: %s", resultText(res))
+	}
+
+	// No instance with a config_file: the tool is not offered.
+	reg3 := registry(t, map[string]*haproxy.HAProxyClient{"a": {StatsClient: hatesting.NewMockStatsClient()}})
+	for _, n := range toolNames(t, reg3) {
+		if n == "show_config" {
+			t.Error("show_config must not be registered without any config_file")
+		}
 	}
 }

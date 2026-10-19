@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/url"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -44,7 +45,7 @@ func NewHAProxyClient(runtimeAPIURL string) (*HAProxyClient, error) {
 		return nil, fmt.Errorf("failed to connect to HAProxy Runtime API: %w", err)
 	}
 
-	slog.Info("Successfully connected to HAProxy Runtime API", "url", runtimeAPIURL, "mode", client.Mode)
+	slog.Debug("Successfully connected to HAProxy Runtime API", "url", runtimeAPIURL, "mode", client.Mode)
 
 	return client, nil
 }
@@ -180,8 +181,8 @@ func (c *HAProxyClient) executeSocatCommand(target, command string) (string, err
 	slog.Debug("Running socat command", "full_command", fmt.Sprintf("%s %s stdio", socatPath, target))
 	err = cmd.Run()
 	if err != nil {
-		stderr := errOut.String()
-		slog.Error("Socat command failed", "error", err, "stderr", stderr)
+		stderr := cleanSocatStderr(errOut.String())
+		slog.Debug("Socat command failed", "error", err, "stderr", stderr)
 		return "", fmt.Errorf("socat command failed: %w, stderr: %s", err, stderr)
 	}
 
@@ -239,7 +240,7 @@ func (c *HAProxyClient) ExecuteRuntimeCommandWithContext(ctx context.Context, co
 	// Only use direct connection
 	result, err := c.executeDirectCommandWithContext(ctx, command)
 	if err != nil {
-		slog.Error("Failed to execute runtime command", "command", command, "error", err)
+		slog.Debug("Failed to execute runtime command", "command", command, "error", err)
 		return "", fmt.Errorf("failed to execute runtime command: %w", err)
 	}
 
@@ -362,4 +363,13 @@ func (c *HAProxyClient) executeDirectUnixCommand(command string) (string, error)
 	// Use default background context
 	ctx := context.Background()
 	return c.executeDirectUnixCommandWithContext(ctx, command)
+}
+
+// socatPrefix is what socat puts before each message: a timestamp and its process id.
+var socatPrefix = regexp.MustCompile(`(?m)^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} socat\[\d+\] `)
+
+// cleanSocatStderr drops the volatile prefix of socat's messages, so that the same failure always
+// reads the same ("E connect(5, AF=2 10.0.0.1:9999, 16): Connection refused").
+func cleanSocatStderr(stderr string) string {
+	return strings.TrimSpace(socatPrefix.ReplaceAllString(stderr, ""))
 }

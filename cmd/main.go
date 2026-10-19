@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -105,37 +106,15 @@ func main() {
 
 	case "http":
 		addr := fmt.Sprintf(":%d", cfg.MCPPort)
-
-		// Create an SSE server
-		mcp_handler :=server.NewStreamableHTTPServer(mcpServer,
-			server.WithEndpointPath("/mcp"),
-		)
-
-		// Create HTTP server with SSE handler
-		httpServer := &http.Server{
-			Addr:    addr,
-			Handler: mcp_handler,
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			slog.Error("HTTP server failed", "error", err)
+			os.Exit(1)
 		}
-
-		go func() {
-			slog.Info("Starting HTTP server for MCP http transport", "address", addr)
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				slog.Error("HTTP server failed", "error", err)
-				os.Exit(1)
-			}
-		}()
-
-		// Wait for shutdown signal
-		<-ctx.Done()
-		slog.Info("Shutdown signal received, stopping HTTP server...")
-
-		// Graceful shutdown
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(shutdownCtx); err != nil {
-			slog.Error("HTTP server graceful shutdown failed", "error", err)
-		} else {
-			slog.Info("HTTP server stopped gracefully")
+		slog.Info("Starting HTTP server for MCP http transport", "address", addr)
+		if err := serveHTTP(ctx, mcpServer, ln, 5*time.Second); err != nil {
+			slog.Error("HTTP server failed", "error", err)
+			os.Exit(1)
 		}
 
 	default:
@@ -162,15 +141,26 @@ func newRegistry(configs []config.InstanceConfig) (*haproxy.Registry, error) {
 			StatsURL:    statsURL,
 			ConfigFile:  ic.ConfigFile,
 			Addresses:   ic.Addresses,
-			Connect:     func() (*haproxy.HAProxyClient, error) { return connect(ic, runtimeAPIURL, statsURL) },
+			Connect: func() func() (*haproxy.HAProxyClient, error) {
+				attempts := 0
+				return func() (*haproxy.HAProxyClient, error) {
+					attempts++
+					return connect(ic, runtimeAPIURL, statsURL, attempts == 1)
+				}
+			}(),
 		})
 	}
 	return haproxy.NewRegistry(instances...)
 }
 
 // connect creates the client of an instance and checks that every configured API answers.
-func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string) (*haproxy.HAProxyClient, error) {
-	slog.Info("Connecting to HAProxy", "instance", ic.Name,
+// The first attempt is logged at info level; the retries of an unavailable instance at debug level.
+func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string, first bool) (*haproxy.HAProxyClient, error) {
+	level := slog.LevelDebug
+	if first {
+		level = slog.LevelInfo
+	}
+	slog.Log(context.Background(), level, "Connecting to HAProxy", "instance", ic.Name,
 		"runtimeAPIURL", config.RedactURL(runtimeAPIURL), "statsURL", config.RedactURL(statsURL))
 	client, err := haproxy.NewHAProxyClient(runtimeAPIURL, statsURL)
 	if err != nil {
@@ -183,4 +173,45 @@ func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string) (*haproxy
 	client.ConfigFile = ic.ConfigFile
 	client.Addresses = haproxy.EffectiveAddresses(ic.Addresses, runtimeAPIURL, statsURL)
 	return client, nil
+}
+
+// serveHTTP serves the MCP server over HTTP at /mcp on ln until ctx is done, then shuts down within
+// grace. A request still running after grace is cut off (logged, not an error).
+func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, ln net.Listener, grace time.Duration) error {
+	// The MCP endpoint, served by our own http.Server so that its timeouts and shutdown are ours.
+	mux := http.NewServeMux()
+	httpServer := &http.Server{Handler: mux}
+	mcpHandler := server.NewStreamableHTTPServer(mcpServer,
+		server.WithEndpointPath("/mcp"),
+		server.WithStreamableHTTPServer(httpServer), // lets mcpHandler.Shutdown stop it
+	)
+	mux.Handle("/mcp", mcpHandler)
+
+	failed := make(chan error, 1)
+	go func() {
+		if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+			failed <- err
+		}
+	}()
+
+	select {
+	case err := <-failed:
+		return err
+	case <-ctx.Done():
+	}
+	slog.Info("Shutdown signal received, stopping HTTP server...")
+
+	// MCP clients keep a GET event stream open for server notifications. http.Server.Shutdown waits
+	// for such a connection to become idle, which it never does while the client is connected, so
+	// the sessions have to be closed first: mcpHandler.Shutdown does that and then shuts down
+	// httpServer, letting in-flight requests finish.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	if err := mcpHandler.Shutdown(shutdownCtx); err != nil {
+		slog.Warn("HTTP server did not stop in time (a request is still running), closing the remaining connections", "error", err)
+		_ = httpServer.Close()
+		return nil
+	}
+	slog.Info("HTTP server stopped gracefully")
+	return nil
 }

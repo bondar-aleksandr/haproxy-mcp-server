@@ -3,6 +3,7 @@ package haproxy
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -120,5 +121,25 @@ func TestDescribeAddresses(t *testing.T) {
 		if got[name] != addrs {
 			t.Errorf("%s: addresses %q, want %q", name, got[name], addrs)
 		}
+	}
+}
+
+func TestLastError(t *testing.T) {
+	n := 0
+	inst := &Instance{Name: "x", StatsURL: "http://u:secret@h/stats", Connect: func() (*HAProxyClient, error) {
+		n++
+		return nil, fmt.Errorf("attempt failed for http://u:secret@h/stats (try %d)", n/10) // same reason for a while
+	}}
+	if inst.LastError() != "" {
+		t.Error("no error before the first attempt")
+	}
+	_ = inst.TryConnect()
+	first := inst.LastError()
+	if first == "" || strings.Contains(first, "secret") {
+		t.Fatalf("last error should be set and scrubbed: %q", first)
+	}
+	_ = inst.TryConnect()
+	if inst.LastError() != first {
+		t.Errorf("the same failure must read the same: %q vs %q", inst.LastError(), first)
 	}
 }
