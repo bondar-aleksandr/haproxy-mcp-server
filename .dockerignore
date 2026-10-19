@@ -1,0 +1,9 @@
+# Keep real configurations, credentials and VCS data out of the build context and the builder layers.
+.git
+.github
+.dagger
+live_data
+bin
+*.cfg
+*.log
+config.toml
