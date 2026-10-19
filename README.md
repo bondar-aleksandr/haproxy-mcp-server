@@ -54,108 +54,123 @@ go install github.com/tuannvm/haproxy-mcp-server/cmd/server@latest
 ```bash
 docker pull ghcr.io/tuannvm/haproxy-mcp-server:latest
 docker run -it --rm \
-  -e HAPROXY_HOST=your-haproxy-host \
-  -e HAPROXY_PORT=9999 \
-  ghcr.io/tuannvm/haproxy-mcp-server:latest
+  -v $(pwd)/config.toml:/etc/haproxy-mcp/config.toml:ro \
+  ghcr.io/tuannvm/haproxy-mcp-server:latest --config /etc/haproxy-mcp/config.toml
 ```
 
 ## MCP Integration
 
 To use this server with MCP-compatible LLMs, configure the assistant with the following connection details:
 
-### HAProxy Runtime API over TCP4:
+Write a `config.toml` describing your HAProxy instances (see [Configuration](#configuration)), then point the server at it:
 
 ```json
 {
   "mcpServers": {
     "haproxy": {
       "command": "haproxy-mcp-server",
+      "args": ["--config", "/etc/haproxy-mcp/config.toml"],
       "env": {
-        "HAPROXY_HOST": "localhost",
-        "HAPROXY_PORT": "9999",
-        "HAPROXY_RUNTIME_MODE": "tcp4",
-        "HAPROXY_RUNTIME_TIMEOUT": "10",
-        "MCP_TRANSPORT": "stdio"
+        "MCP_TRANSPORT": "stdio",
+        "HAPROXY_PROD_STATS_URL": "http://user:password@10.0.0.1:8404/stats"
       }
     }
   }
 }
 ```
 
-### HAProxy Runtime API over Unix Socket:
-
-```json
-{
-  "mcpServers": {
-    "haproxy": {
-      "command": "haproxy-mcp-server",
-      "env": {
-        "HAPROXY_RUNTIME_MODE": "unix",
-        "HAPROXY_RUNTIME_SOCKET": "/var/run/haproxy/admin.sock",
-        "HAPROXY_RUNTIME_TIMEOUT": "10",
-        "MCP_TRANSPORT": "stdio"
-      }
-    }
-  }
-}
-```
-
-### HAProxy with Stats Page Support:
-
-```json
-{
-  "mcpServers": {
-    "haproxy": {
-      "command": "haproxy-mcp-server",
-      "env": {
-        "HAPROXY_STATS_ENABLED": "true",
-        "HAPROXY_STATS_URL": "http://localhost:8404/stats",
-        "HAPROXY_STATS_TIMEOUT": "5",
-        "MCP_TRANSPORT": "stdio"
-      }
-    }
-  }
-}
-```
-
-When using only the stats page functionality, there's no need to define Runtime API parameters like host and port. You can use both Runtime API and Stats Page simultaneously for complementary capabilities, or use only one of them based on your environment's constraints.
+The `env` block is optional; it is the place for sensitive values overriding the file (here the stats URL of the `prod` instance, with credentials). Each instance can use the Runtime API over TCP4 or a Unix socket, the stats page, or both; an instance with only the stats page offers the read-only tools.
 
 > **Note:** For detailed instructions on how to configure HAProxy to expose the Runtime API and Statistics page, see the [HAProxy Configuration Guide](haproxy.md).
 
 ## Available MCP Tools
 
-The HAProxy MCP Server exposes tools that map directly to HAProxy's Runtime API commands, organized into the following categories:
+The server provides read-only inspection tools; it deliberately has no tools that change servers, health checks, weights or the configuration, or reload HAProxy.
 
-- **Statistics & Process Info**: Retrieve statistics, server information, and manage counters
-- **Topology Discovery**: List frontends, backends, server states, and configuration details
-- **Dynamic Pool Management**: Add, remove, enable/disable servers and adjust their properties
-- **Session Control**: View and manage active sessions
-- **Maps & ACLs**: Manage HAProxy maps and ACL files
-- **Health Checks & Agents**: Control health checks and agent-based monitoring
-- **Miscellaneous**: View errors, run echo tests, and get help information
+| Tool | Purpose | Needs Runtime API |
+| --- | --- | --- |
+| `list_services` | **Start here.** Frontends with their bind addresses and the backends they route to, with backend health | no |
+| `list_frontends` | Frontends: status, binds, routes, counters | no |
+| `list_backends` | Backends and their servers: status, health, counters, frontends using them | no (server state: yes) |
+| `show_stat` | Raw statistics table (optional name filter) | no |
+| `show_info`, `debug_counters` | Process information, internal counters | yes |
+| `clear_counters_all` | Reset statistics counters | yes |
+
+The three `list_*` tools share the same arguments, so the model can go from a first look to a single object without switching tools:
+
+- `detail`: `terse` (default) is the first look (identity, status, health summary, what is wrong); `standard` adds counters, the table of servers and the routes with their conditions; `full` adds every column HAProxy reports (the whole stats row, and for servers the whole `show servers state` row). `list_services` has `terse` and `standard`.
+- `name`: only this frontend / backend. For `list_backends`, `server` narrows to one server of that backend.
+
+Objects carry HAProxy's ids (`iid` for frontends and backends, `sid` for servers) to correlate the tools with each other and with `show_stat`.
+
+**Stats-only instances:** when an instance has no Runtime API (no `runtime.mode` of `tcp4`/`unix`, no `runtime.url`), only the tools marked "no" above work for it. The tools that need the Runtime API are not registered at all if no instance has it, and fail with a clear error for instances without it.
 
 For a complete list of all supported tools with their inputs, outputs, and corresponding HAProxy Runtime API commands, see the [tools.md](tools.md) documentation.
 
 ## Configuration
 
-The server can be configured using the following environment variables:
+The server is configured with a TOML file passed via `--config` (required); see [config.example.toml](config.example.toml) for all keys:
 
-| Variable | Description | Default |
-| --- | --- | --- |
-| HAPROXY_HOST | Host of the HAProxy instance (TCP4 mode only) | 127.0.0.1 |
-| HAPROXY_PORT | Port for the HAProxy Runtime API (TCP4 mode only) | 9999 |
-| HAPROXY_RUNTIME_MODE | Connection mode: "tcp4" or "unix" | tcp4 |
-| HAPROXY_RUNTIME_SOCKET | Socket path (Unix mode only) | /var/run/haproxy/admin.sock |
-| HAPROXY_RUNTIME_URL | Direct URL to Runtime API (optional, overrides other runtime settings) | |
-| HAPROXY_RUNTIME_TIMEOUT | Timeout for runtime API operations in seconds | 10 |
-| HAPROXY_STATS_ENABLED | Enable HAProxy stats page support | true |
-| HAPROXY_STATS_URL | URL to HAProxy stats page (e.g., http://localhost:8404/stats) | http://127.0.0.1:8404/stats |
-| HAPROXY_STATS_TIMEOUT | Timeout for stats page operations in seconds | 5 |
-| MCP_TRANSPORT | MCP transport method (stdio/http) | stdio |
-| MCP_PORT | Port for HTTP transport (when using http) | 8080 |
-| LOG_LEVEL | Logging level (debug/info/warn/error) | info |
+```bash
+haproxy-mcp-server --config /etc/haproxy-mcp/config.toml
+```
 
-**Note:** You can use the Runtime API (TCP4 or Unix socket mode), the Stats API, or both simultaneously. At least one must be properly configured for the server to function.
+Every key can be overridden by an environment variable, which is the recommended way to supply sensitive values such as credentials embedded in a stats URL (`http://user:pass@host:8404/stats`). Precedence: environment variable > config file > built-in default. Credentials in URLs are masked in logs and in the `haproxy://instances` resource.
+
+### HAProxy instances
+
+Define one `[instances.<name>]` table per HAProxy (at least one is required):
+
+```toml
+[instances.prod]
+description = "Production edge"
+[instances.prod.runtime]
+mode = "tcp4"
+host = "10.0.0.1"
+port = 9999
+[instances.prod.stats]
+url = "http://10.0.0.1:8404/stats"
+
+[instances.staging.stats]          # stats page only: read-only tools
+url = "http://10.0.1.1:8404/stats"
+```
+
+| Key (under `instances.<name>`) | Environment variable | Description | Default |
+| --- | --- | --- | --- |
+| `description` | HAPROXY_&lt;NAME&gt;_DESCRIPTION | Free text shown in the instances resource | |
+| `config_file` | HAPROXY_&lt;NAME&gt;_CONFIG_FILE | The instance's `haproxy.cfg` (file, or directory of `*.cfg`) as readable from this server; enables bind IPs and frontend-to-backend routes, see below | |
+| `runtime.mode` | HAPROXY_&lt;NAME&gt;_RUNTIME_MODE | `tcp4` or `unix`; empty = no Runtime API | |
+| `runtime.host` | HAPROXY_&lt;NAME&gt;_HOST | Runtime API host (tcp4 only) | 127.0.0.1 |
+| `runtime.port` | HAPROXY_&lt;NAME&gt;_PORT | Runtime API port (tcp4 only) | 9999 |
+| `runtime.socket` | HAPROXY_&lt;NAME&gt;_RUNTIME_SOCKET | Runtime API socket path (unix only) | /var/run/haproxy/admin.sock |
+| `runtime.url` | HAPROXY_&lt;NAME&gt;_RUNTIME_URL | Direct Runtime API URL, overrides the above | |
+| `stats.enabled` | HAPROXY_&lt;NAME&gt;_STATS_ENABLED | Use the stats page | true |
+| `stats.url` | HAPROXY_&lt;NAME&gt;_STATS_URL | Stats page URL, e.g. `http://localhost:8404/stats` | |
+
+`<NAME>` is the instance name upper-cased with `-` as `_` (`eu-west` → `HAPROXY_EU_WEST_STATS_URL`). Environment variables only override keys of instances declared in the file; they cannot create instances. Each instance needs the Runtime API, the stats page, or both.
+
+- Every tool takes an `instance` argument (a required enum when several instances are configured, optional with one). A tool that needs the Runtime API fails with a clear error for an instance that only has the stats page.
+- The `haproxy://instances` MCP resource lists the configured instances with their description, `status` (`available`/`unavailable`, with `error`, `lastAttempt` and `attempts` when unavailable), capabilities (`runtime`, `stats`) and endpoints. The set of tools depends on the configured APIs, not on which instances are currently reachable.
+- An instance that cannot be reached (Runtime API or stats page) does not stop the server: it is listed as `unavailable` in the `haproxy://instances` resource, together with the last error, and tool calls targeting it fail with that error. It is retried in the background every `haproxy.retry_interval` until it connects, then becomes `available`. If every instance is unavailable the server still starts. Reachability is only checked until the first successful connection; an instance is not marked unavailable again later.
+
+### Frontends, backends and services
+
+`list_frontends`, `list_backends` and `list_services` describe how traffic flows through an instance:
+
+- `list_frontends`: status, counters, **bind addresses** (`ip:port`, `*` for all addresses, TLS) and **routes** (every `use_backend` rule with its condition and the ACL definitions it uses, then the `default_backend`).
+- `list_backends`: status, algorithm, servers (health, address, weight, check result) with up/down counts, counters, and `used_by`, the frontends routing to the backend.
+- `list_services`: the joined view, one entry per frontend with its binds and, for each route, the state of the backend (status, servers up/down).
+
+HAProxy does not expose the `bind` IPs or the `default_backend`/`use_backend` rules through the Runtime API or the stats page, so these come from the instance's `haproxy.cfg`, given as `config_file` (mount it into the container if HAProxy runs elsewhere; the path is shown by `show env` as `HAPROXY_CFGFILES`). The file is parsed for `frontend`/`listen`/`defaults`/`backend` sections, `bind`, `acl`, `use_backend`, `default_backend` and `mode`; it is re-read when it changes, and it should be the file the running HAProxy was started with. Without `config_file`, frontends only report their listening ports (from the Runtime API, when available), no routes, and the results carry a `warnings` entry saying so. A `use_backend` with a log-format expression (`%[...]`) is reported as `dynamic`.
+
+### Global settings
+
+| Key | Environment variable | Description | Default |
+| --- | --- | --- | --- |
+| `haproxy.retry_interval` | HAPROXY_RETRY_INTERVAL | How often unavailable instances are retried (Go duration, `0` = never) | 30s |
+| `mcp.transport` | MCP_TRANSPORT | MCP transport (`stdio` or `http`) | http |
+| `mcp.port` | MCP_PORT | Port for HTTP transport | 8080 |
+| `log.level` | LOG_LEVEL | `debug`, `info`, `warn`, `error` | info |
 
 ## Security Considerations
 
@@ -176,47 +191,24 @@ go test ./...
 
 # Run tests excluding integration tests
 go test -short ./...
-
-# Run integration tests with specific HAProxy instance
-export HAPROXY_HOST="your-haproxy-host"
-export HAPROXY_PORT="9999"
-go test ./internal/haproxy -v -run Test
 ```
 
 You can test the HAProxy MCP server locally in several ways:
 
 #### Direct CLI Testing
 
-Build and run the server directly with environment variables:
+Build and run the server with a config file:
 
 ```bash
-# Build the server
-go build -o bin/haproxy-mcp-server cmd/server/main.go
+go build -o bin/haproxy-mcp-server ./cmd
 
-# Option 1: Test with TCP connection mode
-HAPROXY_HOST=<your-haproxy-host> HAPROXY_PORT=9999 HAPROXY_RUNTIME_MODE=tcp4 HAPROXY_RUNTIME_TIMEOUT=10 LOG_LEVEL=debug MCP_TRANSPORT=stdio ./bin/haproxy-mcp-server
-
-# Option 2: Test with Unix socket mode
-HAPROXY_RUNTIME_MODE=unix HAPROXY_RUNTIME_SOCKET=/path/to/haproxy.sock HAPROXY_RUNTIME_TIMEOUT=10 LOG_LEVEL=debug MCP_TRANSPORT=stdio ./bin/haproxy-mcp-server
-
-# Option 3: Test with Stats page integration
-HAPROXY_STATS_ENABLED=true HAPROXY_STATS_URL="http://localhost:8404/stats" HAPROXY_STATS_TIMEOUT=5 LOG_LEVEL=debug MCP_TRANSPORT=stdio ./bin/haproxy-mcp-server
-
-# Option 4: Test with both Runtime API and Stats page
-HAPROXY_HOST=<your-haproxy-host> HAPROXY_PORT=9999 HAPROXY_RUNTIME_MODE=tcp4 HAPROXY_RUNTIME_TIMEOUT=10 HAPROXY_STATS_ENABLED=true HAPROXY_STATS_URL="http://localhost:8404/stats" HAPROXY_STATS_TIMEOUT=5 LOG_LEVEL=debug MCP_TRANSPORT=stdio ./bin/haproxy-mcp-server
+cp config.example.toml config.toml   # edit the instances
+MCP_TRANSPORT=stdio LOG_LEVEL=debug ./bin/haproxy-mcp-server --config config.toml
 ```
 
 #### Test Individual MCP Tools
 
-You can test specific MCP tools with JSON-RPC calls:
-
-```bash
-# Test show_info tool
-echo '{"jsonrpc":"2.0","id":1,"method":"callTool","params":{"name":"show_info","arguments":{}}}' | HAPROXY_HOST=<your-haproxy-host> HAPROXY_PORT=9999 HAPROXY_RUNTIME_MODE=tcp4 LOG_LEVEL=debug ./bin/haproxy-mcp-server
-
-# Test show_stat tool
-echo '{"jsonrpc":"2.0","id":2,"method":"callTool","params":{"name":"show_stat","arguments":{"filter":""}}}' | HAPROXY_HOST=<your-haproxy-host> HAPROXY_PORT=9999 HAPROXY_RUNTIME_MODE=tcp4 LOG_LEVEL=debug ./bin/haproxy-mcp-server
-```
+With `MCP_TRANSPORT=http` the server answers MCP over HTTP at `/mcp`; any MCP client or inspector can call the tools and read the `haproxy://instances` resource. Each tool call names its target with the `instance` argument, e.g. `{"name":"show_stat","arguments":{"instance":"prod","filter":""}}`.
 
 ### Technical Implementation
 

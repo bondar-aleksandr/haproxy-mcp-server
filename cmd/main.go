@@ -2,10 +2,10 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,7 +21,10 @@ import (
 
 func main() {
 	// --- Configuration ---
-	cfg, err := config.LoadConfig()
+	configPath := flag.String("config", "", "path to the TOML configuration file defining the HAProxy instances (required; environment variables override its values)")
+	flag.Parse()
+
+	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
@@ -58,80 +61,28 @@ func main() {
 	slog.SetDefault(slog.New(handler))
 
 	slog.Info("Starting HAProxy MCP Server...")
+	if *configPath != "" {
+		slog.Info("Using configuration file", "path", *configPath)
+	}
 	slog.Info("Loaded configuration", "config", cfg)
 
-	// --- HAProxy Runtime API Client ---
-	var runtimeAPIURL string
+	// --- Context and Shutdown Handling ---
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
-	// Use direct URL if provided, otherwise construct from components
-	if cfg.HAProxyRuntimeURL != "" {
-		runtimeAPIURL = cfg.HAProxyRuntimeURL
-	} else {
-		// Handle connection based on runtime mode
-		switch cfg.HAProxyRuntimeMode {
-		case "unix":
-			// Unix socket mode
-			if cfg.HAProxyRuntimeSocket == "" {
-				slog.Error("HAProxy Runtime socket path is empty. Please set HAPROXY_RUNTIME_SOCKET env variable.")
-				os.Exit(1)
-			}
-
-			// Create a URL with unix socket protocol
-			u := &url.URL{
-				Scheme: "unix",
-				Path:   cfg.HAProxyRuntimeSocket,
-			}
-			runtimeAPIURL = u.String()
-
-		case "tcp4":
-			// TCP4 mode
-			if cfg.HAProxyHost == "" {
-				slog.Error("HAProxy host is empty. Please set HAPROXY_HOST env variable.")
-				os.Exit(1)
-			}
-
-			// Create a TCP URL
-			u := &url.URL{
-				Scheme: "tcp",
-				Host:   fmt.Sprintf("%s:%d", cfg.HAProxyHost, cfg.HAProxyPort),
-			}
-			runtimeAPIURL = u.String()
-
-		default:
-			if cfg.HAProxyStatsEnabled && cfg.HAProxyStatsURL != "" {
-				slog.Warn("Invalid HAProxy runtime mode, but stats API is enabled. Continuing with stats only.",
-					"mode", cfg.HAProxyRuntimeMode)
-				runtimeAPIURL = ""
-			} else {
-				slog.Error("Invalid HAProxy runtime mode and no stats API configured", "mode", cfg.HAProxyRuntimeMode)
-				os.Exit(1)
-			}
-		}
-	}
-
-	// --- HAProxy Stats Client ---
-	var statsURL string
-	if cfg.HAProxyStatsEnabled && cfg.HAProxyStatsURL != "" {
-		statsURL = cfg.HAProxyStatsURL
-		slog.Info("HAProxy Stats API enabled", "url", statsURL)
-	} else {
-		slog.Info("HAProxy Stats API disabled")
-	}
-
-	// Ensure at least one API is configured
-	if runtimeAPIURL == "" && statsURL == "" {
-		slog.Error("Neither HAProxy Runtime API nor Stats API is configured")
-		os.Exit(1)
-	}
-
-	slog.Info("Connecting to HAProxy", "runtimeAPIURL", runtimeAPIURL, "statsURL", statsURL)
-
-	// Create the HAProxy client with the appropriate URLs
-	haproxyClient, err := haproxy.NewHAProxyClient(runtimeAPIURL, statsURL)
+	// --- HAProxy instances ---
+	registry, err := newRegistry(cfg.Instances)
 	if err != nil {
-		// Log fatal here as the client is essential for the server's function
-		slog.Error("Failed to initialize HAProxy client", "error", err)
+		slog.Error("Failed to set up HAProxy instances", "error", err)
 		os.Exit(1)
+	}
+	// Instances that cannot be reached now are listed as unavailable and retried in the background.
+	if n := registry.ConnectAll(); n < len(cfg.Instances) {
+		slog.Warn("Some HAProxy instances are unavailable", "available", n, "configured", len(cfg.Instances),
+			"retry_interval", cfg.RetryInterval)
+		if cfg.RetryInterval > 0 {
+			go registry.Retry(ctx, cfg.RetryInterval)
+		}
 	}
 
 	// --- MCP Server ---
@@ -139,11 +90,7 @@ func main() {
 	mcpServer := server.NewMCPServer("haproxy-mcp-server", "0.1.0")
 
 	// --- Register Tools ---
-	mcp.RegisterTools(mcpServer, haproxyClient) // Use mcp.RegisterTools instead of tools.RegisterTools
-
-	// --- Context and Shutdown Handling ---
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	mcp.RegisterTools(mcpServer, registry) // Use mcp.RegisterTools instead of tools.RegisterTools
 
 	// --- Transport Handling ---
 	switch cfg.MCPTransport {
@@ -160,16 +107,18 @@ func main() {
 		addr := fmt.Sprintf(":%d", cfg.MCPPort)
 
 		// Create an SSE server
-		sseServer := server.NewSSEServer(mcpServer)
+		mcp_handler :=server.NewStreamableHTTPServer(mcpServer,
+			server.WithEndpointPath("/mcp"),
+		)
 
 		// Create HTTP server with SSE handler
 		httpServer := &http.Server{
 			Addr:    addr,
-			Handler: sseServer,
+			Handler: mcp_handler,
 		}
 
 		go func() {
-			slog.Info("Starting HTTP server for MCP SSE transport", "address", addr)
+			slog.Info("Starting HTTP server for MCP http transport", "address", addr)
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				slog.Error("HTTP server failed", "error", err)
 				os.Exit(1)
@@ -195,4 +144,41 @@ func main() {
 	}
 
 	slog.Info("HAProxy MCP Server stopped.")
+}
+
+// newRegistry declares the configured instances. Connecting to them is left to the registry.
+func newRegistry(configs []config.InstanceConfig) (*haproxy.Registry, error) {
+	instances := make([]*haproxy.Instance, 0, len(configs))
+	for _, ic := range configs {
+		runtimeAPIURL, err := ic.RuntimeAPIURL()
+		if err != nil {
+			return nil, fmt.Errorf("instance %q: %w", ic.Name, err)
+		}
+		statsURL := ic.StatsAPIURL()
+		instances = append(instances, &haproxy.Instance{
+			Name:        ic.Name,
+			Description: ic.Description,
+			RuntimeURL:  runtimeAPIURL,
+			StatsURL:    statsURL,
+			ConfigFile:  ic.ConfigFile,
+			Connect:     func() (*haproxy.HAProxyClient, error) { return connect(ic, runtimeAPIURL, statsURL) },
+		})
+	}
+	return haproxy.NewRegistry(instances...)
+}
+
+// connect creates the client of an instance and checks that every configured API answers.
+func connect(ic config.InstanceConfig, runtimeAPIURL, statsURL string) (*haproxy.HAProxyClient, error) {
+	slog.Info("Connecting to HAProxy", "instance", ic.Name,
+		"runtimeAPIURL", config.RedactURL(runtimeAPIURL), "statsURL", config.RedactURL(statsURL))
+	client, err := haproxy.NewHAProxyClient(runtimeAPIURL, statsURL)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.CheckConnectivity(); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	client.ConfigFile = ic.ConfigFile
+	return client, nil
 }

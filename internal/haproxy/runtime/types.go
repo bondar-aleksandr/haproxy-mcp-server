@@ -42,28 +42,6 @@ type HAProxyClient struct {
 	Mode             HAProxyClientMode
 }
 
-// BackendInfo represents detailed information about a backend.
-type BackendInfo struct {
-	Name     string            `json:"name"`     // Name of the backend
-	Status   string            `json:"status"`   // Current status (UP, DOWN, etc.)
-	Sessions int               `json:"sessions"` // Current active sessions
-	Servers  []ServerInfo      `json:"servers"`  // Servers in this backend
-	Stats    map[string]string `json:"stats"`    // Additional statistics
-}
-
-// ServerInfo represents detailed information about a server.
-type ServerInfo struct {
-	Name              string `json:"name"`               // Name of the server
-	Address           string `json:"address"`            // IP address of the server
-	Port              string `json:"port"`               // Port of the server
-	Status            string `json:"status"`             // Current status (UP, DOWN, MAINT, etc.)
-	Weight            int    `json:"weight"`             // Current weight
-	CheckStatus       string `json:"check_status"`       // Status of the last health check
-	LastStatusChange  string `json:"last_status_change"` // Time since last status change
-	TotalConnections  int    `json:"total_connections"`  // Total connections
-	ActiveConnections int    `json:"active_connections"` // Current active connections
-}
-
 // CommandOptions provides options for executing HAProxy commands
 type CommandOptions struct {
 	Timeout int  // Timeout in seconds

@@ -1,0 +1,57 @@
+# HAProxy MCP server configuration. Pass it with:  haproxy-mcp --config config.toml
+#
+# Every key can be overridden by an environment variable (shown in the comments), which is the
+# recommended way to provide sensitive values such as credentials embedded in URLs. Precedence:
+# environment > this file > built-in default. Environment variables cannot add instances: each one
+# must have its own [instances.<name>] table here.
+
+[haproxy]
+retry_interval = "30s"   # how often unavailable instances are retried; "0" = never   # HAPROXY_RETRY_INTERVAL
+
+[mcp]
+transport = "http"   # "stdio" or "http" (served at /mcp)                   # MCP_TRANSPORT
+port = 8081           # http transport only                                  # MCP_PORT
+
+[log]
+level = "info"        # debug, info, warn, error                             # LOG_LEVEL
+
+# ---------------------------------------------------------------------------------------------
+# HAProxy instances: one [instances.<name>] table each. Names are case-insensitive and may contain
+# letters, digits, '-' and '_'. Tools take an "instance" argument naming one of them, and the
+# haproxy://instances MCP resource lists them.
+#
+# Per-instance environment variables are HAPROXY_<NAME>_<SUFFIX>, with <NAME> upper-cased and '-'
+# turned into '_': for [instances.prod-eu], HAPROXY_PROD_EU_STATS_URL, HAPROXY_PROD_EU_HOST, ...
+#
+# At least one instance is required. Each needs the Runtime API, the stats page, or both. An instance
+# that cannot be reached is listed as "unavailable" in the resource and retried in the background
+# (see retry_interval) until it connects. Without the Runtime API only the
+# read-only tools served by the stats page work for it (show_stat, list_frontends,
+# list_backends, list_services).
+# ---------------------------------------------------------------------------------------------
+
+[instances.prod]
+description = "Production edge"
+# haproxy.cfg of this instance, as readable from this server (a file, or a directory of *.cfg files).
+# Optional, but the only way to learn the bind IPs of the frontends and which backends they route to
+# (default_backend / use_backend): neither the Runtime API nor the stats page exposes them. It is
+# re-read when it changes. Mount or copy it if HAProxy runs elsewhere.                # HAPROXY_PROD_CONFIG_FILE
+config_file = "prod_haproxy.cfg"
+
+[instances.prod.runtime]
+mode = "tcp4"                                # "tcp4" or "unix"; empty = no Runtime API   # HAPROXY_PROD_RUNTIME_MODE
+host = "172.18.62.7"                                # tcp4 mode only                             # HAPROXY_PROD_HOST
+port = 9999                              # tcp4 mode only                             # HAPROXY_PROD_PORT
+# socket = "/var/run/haproxy/admin.sock" # unix mode only                             # HAPROXY_PROD_RUNTIME_SOCKET
+# url = "tcp://10.0.0.1:9999"            # direct URL, overrides the above            # HAPROXY_PROD_RUNTIME_URL
+
+[instances.prod.stats]
+enabled = true                                                                        # HAPROXY_PROD_STATS_ENABLED
+# May contain basic-auth credentials: "http://user:pass@host:8404/stats"              # HAPROXY_PROD_STATS_URL
+url = "http://admin:P@$$w0rd@172.18.62.7:8404/stats"
+
+[instances.staging]
+description = "Staging, stats page only"
+
+[instances.staging.stats]
+url = "http://10.0.1.1:8404/stats"

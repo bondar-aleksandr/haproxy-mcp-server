@@ -123,48 +123,20 @@ func (c *HAProxyClient) executeSocketCommand(ctx context.Context, network string
 		return "", fmt.Errorf("failed to send command: %w", err)
 	}
 
-	// Read response using dynamic buffer
+	// Abort the read when the context is cancelled
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
+	defer stop()
+
+	// Read the response until HAProxy closes the connection, which it does once the command is done
+	// (non-interactive mode). A short read does not mean the response is complete: TCP delivers
+	// large outputs such as "show stat" in several segments.
 	var buffer bytes.Buffer
-	buf := make([]byte, 4096)
-	for {
-		// Check if context is cancelled
-		select {
-		case <-ctx.Done():
-			return "", ctx.Err()
-		default:
-			// Continue with read
+	if _, err := io.Copy(&buffer, conn); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
 		}
-
-		// Set a short read deadline to allow for context cancellation
-		if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
-			return "", fmt.Errorf("failed to set read deadline: %w", err)
-		}
-
-		n, err := conn.Read(buf)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				// If we timeout on read, check context and try again
-				if ctx.Err() != nil {
-					return "", ctx.Err()
-				}
-				continue
-			}
-			slog.Error("Failed to read response from socket", "error", err)
-			return "", fmt.Errorf("failed to read response: %w", err)
-		}
-		if n == 0 {
-			break
-		}
-		buffer.Write(buf[:n])
-
-		// Check if we've read all available data
-		// This is a heuristic - we assume done if we read less than buffer size
-		if n < len(buf) {
-			break
-		}
+		slog.Error("Failed to read response from socket", "error", err)
+		return "", fmt.Errorf("failed to read response: %w", err)
 	}
 
 	response := buffer.String()

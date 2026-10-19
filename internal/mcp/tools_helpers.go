@@ -24,6 +24,24 @@ func callJSON(ctx context.Context, action, mapKey string, fn func() (interface{}
     return mcp.NewToolResultText(string(out)), nil
 }
 
+// callJSONMap is callJSON for results with several top-level keys; empty "warnings" are left out.
+func callJSONMap(ctx context.Context, action string, fn func() (map[string]interface{}, error)) (*mcp.CallToolResult, error) {
+    m, err := fn()
+    if err != nil {
+        slog.ErrorContext(ctx, "Failed to "+action, "error", err)
+        return mcp.NewToolResultError(fmt.Sprintf("Failed to %s: %v", action, err)), nil
+    }
+    if w, ok := m["warnings"].([]string); ok && len(w) == 0 {
+        delete(m, "warnings")
+    }
+    out, err := json.Marshal(m)
+    if err != nil {
+        slog.ErrorContext(ctx, "Failed to marshal "+action+" output", "error", err)
+        return mcp.NewToolResultError("Internal server error: failed to marshal results"), nil
+    }
+    return mcp.NewToolResultText(string(out)), nil
+}
+
 // callExec handles executing a client action, error logging, and returning plain text
 func callExec(ctx context.Context, action string, fn func() (string, error)) (*mcp.CallToolResult, error) {
     s, err := fn()
@@ -36,16 +54,18 @@ func callExec(ctx context.Context, action string, fn func() (string, error)) (*m
 
 // getString extracts a string argument from the request
 func getString(req mcp.CallToolRequest, key string) string {
-    if v, ok := req.Params.Arguments[key].(string); ok {
-        return v
+    v, err := req.RequireString(key)
+    if err != nil {
+        return ""
     }
-    return ""
+    return v
 }
 
-// getInt extracts a numeric argument (as int) from the request
-func getInt(req mcp.CallToolRequest, key string) int {
-    if f, ok := req.Params.Arguments[key].(float64); ok {
-        return int(f)
-    }
-    return 0
+// withDetail adds the "detail" argument of the overview tools. levels lists the accepted values.
+func withDetail(levels ...string) mcp.ToolOption {
+    return mcp.WithString("detail",
+        mcp.Enum(levels...),
+        mcp.Description("How much to report: terse (default) is the first look, standard adds counters, servers and routes, "+
+            "full adds every column HAProxy reports. Start with terse, then narrow with the name argument before asking for more."),
+    )
 }

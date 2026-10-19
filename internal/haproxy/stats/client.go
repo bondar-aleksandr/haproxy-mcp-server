@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/tuannvm/haproxy-mcp-server/internal/haproxy/common"
@@ -34,11 +35,17 @@ func NewStatsClient(statsURL string) (*StatsClient, error) {
 	}, nil
 }
 
-// buildURL builds a URL with the given suffix
+// buildURL returns the stats page URL with the given ";..." suffix (e.g. ";json") appended,
+// replacing any such suffix already present: "http://h:8404/stats", "http://h:8404/stats/"
+// and "http://h:8404/stats;json" all yield "http://h:8404/stats;json" for ";json".
 func (c *StatsClient) buildURL(suffix string) string {
 	baseURL := c.StatsURL
-	if baseURL[len(baseURL)-1] != '/' {
-		baseURL += "/"
+	if i := strings.IndexByte(baseURL, ';'); i >= 0 {
+		baseURL = baseURL[:i]
+	}
+	baseURL = strings.TrimRight(baseURL, "/")
+	if i := strings.Index(baseURL, "://"); i >= 0 && !strings.Contains(baseURL[i+3:], "/") {
+		baseURL += "/" // stats served at the root: "http://h:8404/;json"
 	}
 	return baseURL + suffix
 }
@@ -61,7 +68,7 @@ func (c *StatsClient) GetStats() (*HAProxyStats, error) {
 
 	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HAProxy stats request failed with status code: %d", resp.StatusCode)
+		return nil, fmt.Errorf("HAProxy stats request to %s failed with status code: %d", statsURL, resp.StatusCode)
 	}
 
 	// Read and parse response
@@ -72,7 +79,7 @@ func (c *StatsClient) GetStats() (*HAProxyStats, error) {
 
 	var stats HAProxyStats
 	if err := json.Unmarshal(body, &stats); err != nil {
-		return nil, fmt.Errorf("failed to parse HAProxy stats: %w", err)
+		return nil, fmt.Errorf("failed to parse HAProxy stats from %s (is it the ;json endpoint?): %w", statsURL, err)
 	}
 
 	return &stats, nil
@@ -81,12 +88,7 @@ func (c *StatsClient) GetStats() (*HAProxyStats, error) {
 // GetSchema fetches the JSON schema for HAProxy stats
 func (c *StatsClient) GetSchema() (*StatsSchema, error) {
 	// Construct URL for schema
-	schemaURL := c.StatsURL
-	if schemaURL[len(schemaURL)-6:] == ";json" {
-		schemaURL = schemaURL[:len(schemaURL)-5] + "-schema"
-	} else {
-		schemaURL = c.buildURL(";json-schema")
-	}
+	schemaURL := c.buildURL(";json-schema")
 
 	// Make HTTP request
 	resp, err := c.httpClient.Get(schemaURL)
