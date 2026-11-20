@@ -113,14 +113,19 @@ func main() {
 		slog.Info("MCP server (stdio) finished gracefully")
 
 	case "http":
+		opts, err := newHTTPOptions(cfg)
+		if err != nil {
+			slog.Error("Invalid HTTP transport settings", "error", err)
+			os.Exit(1)
+		}
 		addr := fmt.Sprintf(":%d", cfg.MCPPort)
 		ln, err := net.Listen("tcp", addr)
 		if err != nil {
 			slog.Error("HTTP server failed", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("Starting HTTP server for MCP http transport", "address", addr)
-		if err := serveHTTP(ctx, mcpServer, registry, ln, 5*time.Second); err != nil {
+		slog.Info("Starting HTTP server for MCP http transport", "address", addr, "tls", opts.TLS != nil, "basic_auth", opts.BasicAuth.Enabled)
+		if err := serveHTTP(ctx, mcpServer, registry, ln, opts, 5*time.Second); err != nil {
 			slog.Error("HTTP server failed", "error", err)
 			os.Exit(1)
 		}
@@ -207,21 +212,30 @@ func healthHandler(reg *haproxy.Registry) http.Handler {
 
 // serveHTTP serves the MCP server over HTTP at /mcp, and the health check at /healthz, on ln until
 // ctx is done, then shuts down within grace. A request still running after grace is cut off (logged,
-// not an error).
-func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Registry, ln net.Listener, grace time.Duration) error {
+// not an error). opts adds TLS and basic authentication; /healthz is never behind authentication (it
+// gives out only counts), so that health checks need no credentials.
+func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Registry, ln net.Listener, opts httpOptions, grace time.Duration) error {
 	// The MCP endpoint, served by our own http.Server so that its timeouts and shutdown are ours.
 	mux := http.NewServeMux()
-	httpServer := &http.Server{Handler: mux}
+	httpServer := &http.Server{Handler: mux, TLSConfig: opts.TLS}
 	mcpHandler := server.NewStreamableHTTPServer(mcpServer,
 		server.WithEndpointPath("/mcp"),
 		server.WithStreamableHTTPServer(httpServer), // lets mcpHandler.Shutdown stop it
 	)
-	mux.Handle("/mcp", mcpHandler)
+	var endpoint http.Handler = mcpHandler
+	if opts.BasicAuth.Enabled {
+		endpoint = requireBasicAuth(mcpHandler, opts.BasicAuth)
+	}
+	mux.Handle("/mcp", endpoint)
 	mux.Handle("/healthz", healthHandler(reg))
 
 	failed := make(chan error, 1)
 	go func() {
-		if err := httpServer.Serve(ln); err != nil && err != http.ErrServerClosed {
+		serve := httpServer.Serve
+		if opts.TLS != nil {
+			serve = func(l net.Listener) error { return httpServer.ServeTLS(l, "", "") } // the certificate is in TLSConfig
+		}
+		if err := serve(ln); err != nil && err != http.ErrServerClosed {
 			failed <- err
 		}
 	}()

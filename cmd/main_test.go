@@ -65,7 +65,9 @@ func TestServeHTTPShutdownWithOpenStream(t *testing.T) {
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
 	done := make(chan error, 1)
-	go func() { done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, 10*time.Second) }()
+	go func() {
+		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, httpOptions{}, 10*time.Second)
+	}()
 
 	url := "http://" + ln.Addr().String() + "/mcp"
 	post := func(session, body string) *http.Response {
@@ -152,7 +154,9 @@ func TestHealthz(t *testing.T) {
 	}
 	ctx, stop := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, 5*time.Second) }()
+	go func() {
+		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, httpOptions{}, 5*time.Second)
+	}()
 	defer func() { stop(); <-done }()
 	url := "http://" + ln.Addr().String() + "/healthz"
 

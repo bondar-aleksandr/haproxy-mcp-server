@@ -52,14 +52,15 @@ internal/mcp/           tool and resource registration
 - **Correlation.** HAProxy's own ids (`iid`, `sid`) appear in every view so that results can be matched with each other and with `show_stat`.
 - **Raw escape hatch.** `show_stat` and `show_config` return the data as HAProxy has it, for what the structured tools do not model.
 - **Honest gaps.** A missing source never produces a guess: a bind without a known IP shows `port 443`, a route that needs the configuration is absent and `warnings` says why. A configuration file newer than the process start time produces a warning, since it may not be what is running.
-- **Secrets.** URLs with credentials are masked in logs and in the resource, error texts are scrubbed of passwords, and `show_config` masks credential-looking values (best effort, see the README). The MCP endpoint itself has no authentication: keep it on an internal network.
+- **Secrets.** URLs with credentials are masked in logs and in the resource, error texts are scrubbed of passwords, and `show_config` masks credential-looking values (best effort, see the README). The MCP endpoint can require HTTPS and basic authentication (`[mcp.tls]`, `[mcp.basic_auth]`); `/healthz` stays open, it gives out only counts.
 
 ## Operations
 
 - **Configuration**: a TOML file (`--config`), every key overridable by an environment variable; instances can only be declared in the file.
 - **Logging**: `log/slog`, JSON on HTTP, text on stdio. Connection attempts to an unavailable instance are quiet after the first; a retry logs a warning only when the failure reason changes.
 - **Shutdown**: on SIGINT/SIGTERM the MCP sessions are closed first (clients keep a standing event stream open, which would otherwise hold the HTTP connections for the whole grace period), then the HTTP server stops, within 5 s.
-- **Health**: `GET /healthz` is liveness only and independent of HAProxy; see the README.
+- **Health**: `GET /healthz` is liveness only and independent of HAProxy, and needs no credentials; see the README.
+- **HTTPS and authentication**: optional TLS (certificate loaded at startup, TLS 1.2+) and basic authentication on `/mcp`, compared in constant time; a warning is logged when basic authentication runs without TLS.
 - **Build**: `make build`, `make test`, `make docker-build`; the version comes from linker flags (`--version`). The Dockerfile builds a static binary into an Alpine image with `socat`, running as an unprivileged user.
 
 ## Testing

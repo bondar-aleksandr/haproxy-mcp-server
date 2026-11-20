@@ -74,8 +74,12 @@ EXPOSE 8080
 # reachable (instances are retried in the background and the server runs with none available).
 # The container is expected to listen on the default port 8080 (the HTTP transport): map it to any
 # port outside with -p. --start-period covers the startup connection attempts to unreachable instances.
+# HTTP first, then HTTPS when [mcp.tls] is enabled; the certificate is not checked, since the probe
+# only talks to the server itself. /healthz needs no credentials, even with [mcp.basic_auth].
 HEALTHCHECK --interval=30s --timeout=3s --start-period=15s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz \
+   || wget -q --no-check-certificate -O /dev/null https://127.0.0.1:8080/healthz \
+   || exit 1
 
 # Command to run the executable
 ENTRYPOINT ["/app/haproxy-mcp"]

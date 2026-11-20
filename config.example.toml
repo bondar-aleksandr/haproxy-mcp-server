@@ -12,6 +12,19 @@ retry_interval = "30s"   # how often unavailable instances are retried; "0" = ne
 transport = "http"   # "stdio" or "http" (served at /mcp)                   # MCP_TRANSPORT
 port = 8081           # http transport only                                  # MCP_PORT
 
+# HTTPS for the http transport. The certificate (chain) and key are PEM files.
+[mcp.tls]
+enabled = true                                                              # MCP_TLS_ENABLED
+cert_file = "./certs/server.crt"                                                 # MCP_TLS_CERT_FILE
+cert_key = "./certs/server.key"                                                  # MCP_TLS_CERT_KEY
+
+# HTTP basic authentication on /mcp (not on /healthz). Use it with TLS, or the credentials travel in
+# clear text. The values here are placeholders: give the real ones through the environment.
+[mcp.basic_auth]
+enabled = true                                                               # MCP_BASIC_AUTH_ENABLED
+username = "placeholder"                                                     # MCP_BASIC_AUTH_USERNAME
+password = "placeholder"                                                     # MCP_BASIC_AUTH_PASSWORD
+
 [log]
 level = "info"        # debug, info, warn, error                             # LOG_LEVEL
 
@@ -46,7 +59,7 @@ config_file = "live_data/prod_haproxy.cfg"
 
 [instances.prod.runtime]
 mode = "tcp4"                                # "tcp4" or "unix"; empty = no Runtime API   # HAPROXY_PROD_RUNTIME_MODE
-host = "172.18.62.7"                                # tcp4 mode only                             # HAPROXY_PROD_HOST
+host = "haproxy.dt.demo"                                # tcp4 mode only                             # HAPROXY_PROD_HOST
 port = 9999                              # tcp4 mode only                             # HAPROXY_PROD_PORT
 # socket = "/var/run/haproxy/admin.sock" # unix mode only                             # HAPROXY_PROD_RUNTIME_SOCKET
 # url = "tcp://10.0.0.1:9999"            # direct URL, overrides the above            # HAPROXY_PROD_RUNTIME_URL
@@ -54,10 +67,17 @@ port = 9999                              # tcp4 mode only                       
 [instances.prod.stats]
 enabled = true                                                                        # HAPROXY_PROD_STATS_ENABLED
 # May contain basic-auth credentials: "http://user:pass@host:8404/stats"              # HAPROXY_PROD_STATS_URL
-url = "http://admin:P@$$w0rd@172.18.62.7:8404/stats"
+url = "http://admin:P@$$w0rd@haproxy.dt.demo:8404/stats"
 
-[instances.staging]
-description = "Staging, stats page only"
+[instances.k8s-abondar]
+description = "apiserver VIP for k8s-abondar cluster"
+config_file = "live_data/k8s-abondar_haproxy.cfg"
 
-[instances.staging.stats]
-url = "http://10.0.1.1:8404/stats"
+[instances.k8s-abondar.runtime]
+mode = "tcp4"                                # "tcp4" or "unix"; empty = no Runtime API   # HAPROXY_PROD_RUNTIME_MODE
+host = "k8s-haproxy.abondar.dt.demo"                                # tcp4 mode only                             # HAPROXY_PROD_HOST
+port = 9999                              # tcp4 mode only                             # HAPROXY_PROD_PORT
+
+[instances.k8s-abondar.stats]
+enabled = true
+url = "http://admin:P@$$w0rd@k8s-haproxy.abondar.dt.demo:8404/stats"

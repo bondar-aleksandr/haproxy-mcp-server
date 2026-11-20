@@ -230,3 +230,63 @@ func TestLogValueRedactsCredentials(t *testing.T) {
 		t.Errorf("URL without credentials should be kept: %s", got)
 	}
 }
+
+func TestTLSAndBasicAuthSettings(t *testing.T) {
+	clearEnv(t)
+	base := "[instances.a.stats]\nurl = \"http://h/stats\"\n"
+
+	// Off by default.
+	cfg, err := LoadConfig(writeConfig(t, base))
+	if err != nil || cfg.TLS.Enabled || cfg.BasicAuth.Enabled {
+		t.Fatalf("defaults: %+v %v", cfg, err)
+	}
+
+	// From the file; the credentials in the file are placeholders the environment overrides.
+	content := base + `
+[mcp.tls]
+enabled = true
+cert_file = "/certs/tls.crt"
+cert_key = "/certs/tls.key"
+
+[mcp.basic_auth]
+enabled = true
+username = "placeholder"
+password = "placeholder"
+`
+	cfg, err = LoadConfig(writeConfig(t, content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TLS != (TLSConfig{Enabled: true, CertFile: "/certs/tls.crt", KeyFile: "/certs/tls.key"}) {
+		t.Errorf("tls: %+v", cfg.TLS)
+	}
+	if cfg.BasicAuth != (BasicAuthConfig{Enabled: true, Username: "placeholder", Password: "placeholder"}) {
+		t.Errorf("basic auth from the file: %+v", cfg.BasicAuth)
+	}
+	t.Setenv("MCP_BASIC_AUTH_USERNAME", "mcp")
+	t.Setenv("MCP_BASIC_AUTH_PASSWORD", "real-secret")
+	t.Setenv("MCP_TLS_CERT_KEY", "/run/secrets/tls.key")
+	cfg, err = LoadConfig(writeConfig(t, content))
+	if err != nil || cfg.BasicAuth.Username != "mcp" || cfg.BasicAuth.Password != "real-secret" || cfg.TLS.KeyFile != "/run/secrets/tls.key" {
+		t.Errorf("env overrides: %+v %+v %v", cfg.BasicAuth, cfg.TLS, err)
+	}
+	// The password never appears in the logged configuration.
+	if strings.Contains(cfg.LogValue().String(), "real-secret") {
+		t.Error("the password leaks into the log value")
+	}
+
+	// Enabled but incomplete: startup errors.
+	for name, extra := range map[string]string{
+		"tls without files":     "[mcp.tls]\nenabled = true\n",
+		"tls without key":       "[mcp.tls]\nenabled = true\ncert_file = \"/c.pem\"\n",
+		"auth without password": "[mcp.basic_auth]\nenabled = true\nusername = \"u\"\n",
+		"auth without username": "[mcp.basic_auth]\nenabled = true\npassword = \"p\"\n",
+	} {
+		t.Setenv("MCP_BASIC_AUTH_USERNAME", "")
+		t.Setenv("MCP_BASIC_AUTH_PASSWORD", "")
+		t.Setenv("MCP_TLS_CERT_KEY", "")
+		if _, err := LoadConfig(writeConfig(t, base+extra)); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}

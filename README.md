@@ -223,10 +223,19 @@ HAProxy does not expose the `bind` IPs or the `default_backend`/`use_backend` ru
 | `haproxy.retry_interval` | HAPROXY_RETRY_INTERVAL | How often unavailable instances are retried (Go duration, `0` = never) | 30s |
 | `mcp.transport` | MCP_TRANSPORT | MCP transport (`stdio` or `http`) | http |
 | `mcp.port` | MCP_PORT | Port for HTTP transport | 8080 |
+| `mcp.tls.enabled` | MCP_TLS_ENABLED | Serve the HTTP transport over HTTPS | false |
+| `mcp.tls.cert_file` | MCP_TLS_CERT_FILE | PEM certificate (chain) | |
+| `mcp.tls.cert_key` | MCP_TLS_CERT_KEY | PEM private key | |
+| `mcp.basic_auth.enabled` | MCP_BASIC_AUTH_ENABLED | Require HTTP basic authentication on `/mcp` | false |
+| `mcp.basic_auth.username` | MCP_BASIC_AUTH_USERNAME | User name; keep a placeholder in the file and set the real one in the environment | |
+| `mcp.basic_auth.password` | MCP_BASIC_AUTH_PASSWORD | Password; same | |
+
+**TLS and authentication.** With `mcp.tls.enabled` the server speaks HTTPS only (TLS 1.2 or later); the certificate and key are loaded at startup, so a missing or mismatched file stops the server with an error. With `mcp.basic_auth.enabled`, `/mcp` requires the configured user name and password (`401` otherwise); `/healthz` stays open, since it gives out only counts and health checks should not need credentials. Basic authentication without TLS sends the credentials in clear text: the server starts but logs a warning, and you should either enable `mcp.tls` or terminate TLS in a reverse proxy in front of it. The password is never logged. MCP clients send it as a header, for example `"headers": {"Authorization": "Basic <base64 of user:password>"}` in their server entry.
 | `log.level` | LOG_LEVEL | `debug`, `info`, `warn`, `error` | info |
 
 ## Security Considerations
 
+- **The MCP endpoint**: enable `mcp.tls` and `mcp.basic_auth` (see Global settings) when it is reachable beyond a trusted network
 - **Authentication**: Connect to HAProxy's Runtime API using secure methods
 - **Network Security**: When using TCP4 mode, restrict connectivity to the Runtime API port
 - **Unix Socket Permissions**: When using Unix socket mode, ensure proper socket file permissions

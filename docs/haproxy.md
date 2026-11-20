@@ -101,7 +101,7 @@ Binds and frontend-to-backend routes are not exposed by the Runtime API or the s
 2. **Least privilege.** `level operator` is enough for reading; keep `level admin` off the socket the MCP server uses unless `clear_counters_all` is needed.
 3. **Stats page.** Require authentication (`stats auth`), bind it to an internal address, use HTTPS if it crosses an untrusted network (`bind *:8404 ssl crt /path/to/cert.pem`), and do not enable `stats admin`.
 4. **Credentials.** Pass the stats URL with its password through the environment, not the configuration file.
-5. **The MCP endpoint itself** (`/mcp`) has no authentication either: keep it on an internal network or behind a reverse proxy that authenticates.
+5. **The MCP endpoint itself** (`/mcp`): enable HTTPS (`[mcp.tls]`) and basic authentication (`[mcp.basic_auth]`) in the server's configuration (see the README), or keep it on an internal network or behind a reverse proxy that authenticates.
 
 ## Combined configuration example
 

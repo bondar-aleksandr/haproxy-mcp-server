@@ -23,6 +23,8 @@ type Config struct {
 	// MCP Server Settings
 	MCPTransport string // "stdio" or "http"
 	MCPPort      int
+	TLS          TLSConfig       // HTTPS for the http transport
+	BasicAuth    BasicAuthConfig // HTTP basic authentication of the MCP endpoint
 
 	// Logging Settings
 	LogLevel string
@@ -116,6 +118,12 @@ var globalOptions = []struct {
 	{"haproxy.retry_interval", "HAPROXY_RETRY_INTERVAL", "30s"}, // Go duration, "0" = never retry
 	{"mcp.transport", "MCP_TRANSPORT", "http"},                  // "stdio" or "http"
 	{"mcp.port", "MCP_PORT", 8080},
+	{"mcp.tls.enabled", "MCP_TLS_ENABLED", false},
+	{"mcp.tls.cert_file", "MCP_TLS_CERT_FILE", ""},
+	{"mcp.tls.cert_key", "MCP_TLS_CERT_KEY", ""},
+	{"mcp.basic_auth.enabled", "MCP_BASIC_AUTH_ENABLED", false},
+	{"mcp.basic_auth.username", "MCP_BASIC_AUTH_USERNAME", ""}, // better given through the environment
+	{"mcp.basic_auth.password", "MCP_BASIC_AUTH_PASSWORD", ""}, // better given through the environment
 	{"log.level", "LOG_LEVEL", "info"},
 }
 
@@ -163,6 +171,16 @@ func LoadConfig(path string) (*Config, error) {
 		MCPTransport: v.GetString("mcp.transport"),
 		MCPPort:      v.GetInt("mcp.port"),
 		LogLevel:     v.GetString("log.level"),
+		TLS: TLSConfig{
+			Enabled:  v.GetBool("mcp.tls.enabled"),
+			CertFile: v.GetString("mcp.tls.cert_file"),
+			KeyFile:  v.GetString("mcp.tls.cert_key"),
+		},
+		BasicAuth: BasicAuthConfig{
+			Enabled:  v.GetBool("mcp.basic_auth.enabled"),
+			Username: v.GetString("mcp.basic_auth.username"),
+			Password: v.GetString("mcp.basic_auth.password"),
+		},
 	}
 
 	retry, err := time.ParseDuration(v.GetString("haproxy.retry_interval"))
@@ -216,10 +234,30 @@ func loadInstance(v *viper.Viper, known map[string]bool, keyPrefix, envPrefix, n
 	}
 }
 
+// TLSConfig is [mcp.tls]: serve the http transport over HTTPS.
+type TLSConfig struct {
+	Enabled  bool
+	CertFile string // PEM certificate (chain)
+	KeyFile  string // PEM private key (cert_key)
+}
+
+// BasicAuthConfig is [mcp.basic_auth]: require HTTP basic authentication on the MCP endpoint.
+type BasicAuthConfig struct {
+	Enabled  bool
+	Username string
+	Password string
+}
+
 // validate checks that every instance can be reached through at least one API.
 func (c *Config) validate() error {
 	if c.RetryInterval < 0 {
 		return fmt.Errorf("haproxy.retry_interval must not be negative")
+	}
+	if c.TLS.Enabled && (c.TLS.CertFile == "" || c.TLS.KeyFile == "") {
+		return fmt.Errorf("mcp.tls is enabled: set mcp.tls.cert_file and mcp.tls.cert_key (MCP_TLS_CERT_FILE, MCP_TLS_CERT_KEY)")
+	}
+	if c.BasicAuth.Enabled && (c.BasicAuth.Username == "" || c.BasicAuth.Password == "") {
+		return fmt.Errorf("mcp.basic_auth is enabled: set the username and password (MCP_BASIC_AUTH_USERNAME, MCP_BASIC_AUTH_PASSWORD)")
 	}
 	for _, i := range c.Instances {
 		runtimeURL, err := i.RuntimeAPIURL()
@@ -253,6 +291,8 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("RetryInterval", c.RetryInterval),
 		slog.String("MCPTransport", c.MCPTransport),
 		slog.Int("MCPPort", c.MCPPort),
+		slog.Group("TLS", slog.Bool("Enabled", c.TLS.Enabled), slog.String("CertFile", c.TLS.CertFile), slog.String("KeyFile", c.TLS.KeyFile)),
+		slog.Group("BasicAuth", slog.Bool("Enabled", c.BasicAuth.Enabled), slog.String("Username", c.BasicAuth.Username)), // never the password
 		slog.String("LogLevel", c.LogLevel),
 	)
 }
