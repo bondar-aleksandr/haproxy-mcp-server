@@ -89,7 +89,7 @@ func TestServeHTTPShutdownWithOpenStream(t *testing.T) {
 	if session == "" {
 		t.Fatal("no session id")
 	}
-	post(session, `{"jsonrpc":"2.0","method":"notifications/initialized"}`).Body.Close()
+	_ = post(session, `{"jsonrpc":"2.0","method":"notifications/initialized"}`).Body.Close()
 
 	// The standing GET stream.
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
@@ -99,7 +99,7 @@ func TestServeHTTPShutdownWithOpenStream(t *testing.T) {
 	if err != nil || stream.StatusCode != http.StatusOK {
 		t.Fatalf("GET stream: %v %v", stream, err)
 	}
-	defer stream.Body.Close()
+	defer func() { _ = stream.Body.Close() }()
 	time.Sleep(100 * time.Millisecond) // let the handler settle into waiting for events
 
 	start := time.Now()
@@ -157,7 +157,12 @@ func TestHealthz(t *testing.T) {
 	go func() {
 		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, httpOptions{}, 5*time.Second)
 	}()
-	defer func() { stop(); <-done }()
+	defer func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Errorf("serveHTTP: %v", err)
+		}
+	}()
 	url := "http://" + ln.Addr().String() + "/healthz"
 
 	resp, err := http.Get(url)
@@ -193,5 +198,40 @@ func TestHealthz(t *testing.T) {
 	post, err := http.Post(url, "text/plain", nil)
 	if err != nil || post.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("POST /healthz = %v %v", post, err)
+	}
+}
+
+// A connection on which no request ever arrives (HTTP clients open spare ones) must not hold the
+// shutdown: http.Server.Shutdown alone waits 5 s for it.
+func TestServeHTTPShutdownWithUnusedConnection(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, httpOptions{}, 10*time.Second)
+	}()
+
+	conn, err := net.Dial("tcp", ln.Addr().String()) // connected, never sends anything
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	time.Sleep(100 * time.Millisecond) // let the server accept it
+
+	start := time.Now()
+	stop()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serveHTTP returned %v", err)
+		}
+		if took := time.Since(start); took > 2*time.Second {
+			t.Errorf("shutdown took %v with an unused connection open", took)
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("shutdown did not finish")
 	}
 }

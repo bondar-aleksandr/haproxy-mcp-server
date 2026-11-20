@@ -29,8 +29,10 @@ func clearEnv(t *testing.T) {
 	}
 	for _, name := range vars {
 		if old, ok := os.LookupEnv(name); ok {
-			t.Cleanup(func() { os.Setenv(name, old) })
-			os.Unsetenv(name)
+			t.Setenv(name, old) // restores it after the test
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }

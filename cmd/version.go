@@ -22,5 +22,5 @@ var (
 
 // printVersion writes the build information.
 func printVersion(w io.Writer) {
-	fmt.Fprintf(w, "Version: %s\nCommit: %s\nBuild Date: %s\nGoVersion: %s\nPlatform: %s\n", GitVersion, GitCommit, BuildDate, GoVersion, Platform)
+	_, _ = fmt.Fprintf(w, "Version: %s\nCommit: %s\nBuild Date: %s\nGoVersion: %s\nPlatform: %s\n", GitVersion, GitCommit, BuildDate, GoVersion, Platform)
 }

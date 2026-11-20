@@ -123,9 +123,9 @@ func TestSectionsAndFilter(t *testing.T) {
 
 func TestReadSource(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "20-be.cfg"), []byte("backend b\n  server s 1.1.1.1:80"), 0o600) // no trailing newline
-	os.WriteFile(filepath.Join(dir, "10-fe.cfg"), []byte("frontend a\n  bind :80\n"), 0o600)
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("ignored"), 0o600)
+	writeFile(t, filepath.Join(dir, "20-be.cfg"), []byte("backend b\n  server s 1.1.1.1:80")) // no trailing newline
+	writeFile(t, filepath.Join(dir, "10-fe.cfg"), []byte("frontend a\n  bind :80\n"))
+	writeFile(t, filepath.Join(dir, "notes.txt"), []byte("ignored"))
 	src, err := ReadSource(dir)
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +137,7 @@ func TestReadSource(t *testing.T) {
 
 	// A single file is returned as it is, without a marker.
 	one := filepath.Join(t.TempDir(), "haproxy.cfg")
-	os.WriteFile(one, []byte("global\n"), 0o600)
+	writeFile(t, one, []byte("global\n"))
 	if src, err := ReadSource(one); err != nil || src.Text != "global\n" {
 		t.Errorf("file: %q, %v", src, err)
 	}
@@ -145,8 +145,18 @@ func TestReadSource(t *testing.T) {
 	// Stat follows the files inside a directory, not just the directory.
 	m1, s1, _ := Stat(dir)
 	later := m1.Add(time.Hour)
-	os.Chtimes(filepath.Join(dir, "10-fe.cfg"), later, later)
+	if err := os.Chtimes(filepath.Join(dir, "10-fe.cfg"), later, later); err != nil {
+		t.Fatal(err)
+	}
 	if m2, _, _ := Stat(dir); !m2.Equal(later) || s1 == 0 {
 		t.Errorf("Stat should report the latest file mtime: %v vs %v", m2, later)
+	}
+}
+
+// writeFile writes a test fixture, failing the test if it cannot.
+func writeFile(t *testing.T, path string, content []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

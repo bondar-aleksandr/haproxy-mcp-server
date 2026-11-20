@@ -1,7 +1,6 @@
 package hacfg
 
 import (
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -163,9 +162,9 @@ func TestParseBindAddresses(t *testing.T) {
 
 func TestLoadDirectory(t *testing.T) {
 	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "10-fe.cfg"), []byte("frontend a\n    bind :80\n    default_backend b\n"), 0o600)
-	os.WriteFile(filepath.Join(dir, "20-be.cfg"), []byte("backend b\n    server s 1.1.1.1:80\n"), 0o600)
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("frontend ignored\n"), 0o600)
+	writeFile(t, filepath.Join(dir, "10-fe.cfg"), []byte("frontend a\n    bind :80\n    default_backend b\n"))
+	writeFile(t, filepath.Join(dir, "20-be.cfg"), []byte("backend b\n    server s 1.1.1.1:80\n"))
+	writeFile(t, filepath.Join(dir, "notes.txt"), []byte("frontend ignored\n"))
 	cfg, err := Load(dir)
 	if err != nil {
 		t.Fatal(err)

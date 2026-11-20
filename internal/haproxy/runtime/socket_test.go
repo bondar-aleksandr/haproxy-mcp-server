@@ -15,7 +15,7 @@ func fakeRuntime(t *testing.T, respond func(conn net.Conn, command string)) stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 	go func() {
 		for {
 			conn, err := ln.Accept()
@@ -23,7 +23,7 @@ func fakeRuntime(t *testing.T, respond func(conn net.Conn, command string)) stri
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				cmd, _ := bufio.NewReader(conn).ReadString('\n')
 				respond(conn, strings.TrimSpace(cmd))
 			}()

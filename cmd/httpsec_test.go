@@ -80,7 +80,12 @@ func TestTLSAndBasicAuth(t *testing.T) {
 	go func() {
 		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, opts, 5*time.Second)
 	}()
-	defer func() { stop(); <-done }()
+	defer func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Errorf("serveHTTP: %v", err)
+		}
+	}()
 
 	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, Timeout: 5 * time.Second}
 	base := "https://" + ln.Addr().String()
@@ -135,7 +140,12 @@ func TestBasicAuthWithoutTLS(t *testing.T) {
 	go func() {
 		done <- serveHTTP(ctx, server.NewMCPServer("test", "0"), testRegistry(t), ln, opts, 5*time.Second)
 	}()
-	defer func() { stop(); <-done }()
+	defer func() {
+		stop()
+		if err := <-done; err != nil {
+			t.Errorf("serveHTTP: %v", err)
+		}
+	}()
 
 	resp, err := http.Post("http://"+ln.Addr().String()+"/mcp", "application/json", strings.NewReader(initializeBody))
 	if err != nil || resp.StatusCode != http.StatusUnauthorized {

@@ -322,9 +322,7 @@ func stringList(v interface{}) []string {
 	}
 	var out []string
 	for _, r := range raw {
-		for _, f := range strings.FieldsFunc(r, func(c rune) bool { return c == ',' || c == ' ' || c == '\t' }) {
-			out = append(out, f)
-		}
+		out = append(out, strings.FieldsFunc(r, func(c rune) bool { return c == ',' || c == ' ' || c == '\t' })...)
 	}
 	return out
 }

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -218,6 +219,7 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Re
 	// The MCP endpoint, served by our own http.Server so that its timeouts and shutdown are ours.
 	mux := http.NewServeMux()
 	httpServer := &http.Server{Handler: mux, TLSConfig: opts.TLS}
+	unused := trackUnusedConns(httpServer)
 	mcpHandler := server.NewStreamableHTTPServer(mcpServer,
 		server.WithEndpointPath("/mcp"),
 		server.WithStreamableHTTPServer(httpServer), // lets mcpHandler.Shutdown stop it
@@ -251,8 +253,13 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Re
 	// for such a connection to become idle, which it never does while the client is connected, so
 	// the sessions have to be closed first: mcpHandler.Shutdown does that and then shuts down
 	// httpServer, letting in-flight requests finish.
+	//
+	// http.Server.Shutdown also waits up to 5 s for connections on which no request has arrived yet
+	// (clients open spare connections), so those are closed as well while shutting down.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
+	stopClosing := unused.closeWhileShuttingDown()
+	defer stopClosing()
 	if err := mcpHandler.Shutdown(shutdownCtx); err != nil {
 		slog.Warn("HTTP server did not stop in time (a request is still running), closing the remaining connections", "error", err)
 		_ = httpServer.Close()
@@ -260,4 +267,53 @@ func serveHTTP(ctx context.Context, mcpServer *server.MCPServer, reg *haproxy.Re
 	}
 	slog.Info("HTTP server stopped gracefully")
 	return nil
+}
+
+// unusedConns tracks the connections of an http.Server on which no request has arrived yet.
+type unusedConns struct {
+	mu    sync.Mutex
+	conns map[net.Conn]struct{}
+}
+
+func trackUnusedConns(srv *http.Server) *unusedConns {
+	u := &unusedConns{conns: map[net.Conn]struct{}{}}
+	srv.ConnState = func(c net.Conn, state http.ConnState) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if state == http.StateNew {
+			u.conns[c] = struct{}{}
+		} else {
+			delete(u.conns, c)
+		}
+	}
+	return u
+}
+
+// closeWhileShuttingDown closes the connections that have not carried a request, now and every few
+// milliseconds until the returned function is called (the listener may still accept one while the
+// shutdown starts). Closing them loses nothing.
+func (u *unusedConns) closeWhileShuttingDown() (stop func()) {
+	done := make(chan struct{})
+	closeAll := func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		for c := range u.conns {
+			_ = c.Close()
+			delete(u.conns, c)
+		}
+	}
+	closeAll()
+	go func() {
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				closeAll()
+			}
+		}
+	}()
+	return func() { close(done) }
 }
